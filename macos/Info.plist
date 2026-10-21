@@ -9,7 +9,7 @@
         <string>icon.icns</string>
 
         <key>CFBundleIdentifier</key>
-        <string>org.equicord.equilotl</string>
+        <string>io.github.ometavr.distra-installer</string>
 
         <key>NSHighResolutionCapable</key>
         <true/>

@@ -1,6 +1,6 @@
-$link = "https://github.com/Equicord/Equilotl/releases/latest/download/EquilotlCli.exe"
+$link = "https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstallerCli.exe"
 
-$outfile = "$env:TEMP\EquilotlCli.exe"
+$outfile = "$env:TEMP\DistraInstallerCli.exe"
 
 Write-Output "Downloading installer to $outfile"
 

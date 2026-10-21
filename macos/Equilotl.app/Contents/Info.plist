@@ -5,15 +5,15 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>English</string>
 	<key>CFBundleDisplayName</key>
-	<string>Equilotl</string>
+	<string>Distra Installer</string>
 	<key>CFBundleExecutable</key>
 	<string>Equilotl</string>
 	<key>CFBundleIdentifier</key>
-	<string>org.equicord.equilotl</string>
+	<string>io.github.ometavr.distra-installer</string>
 	<key>CFBundleInfoDictionaryVersion</key>
 	<string>6.0</string>
 	<key>CFBundleName</key>
-	<string>Equilotl</string>
+	<string>Distra Installer</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
 	<key>CFBundleShortVersionString</key>
@@ -29,7 +29,7 @@
 	<key>CFBundleIconFile</key>
 	<string>icon.icns</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Copyright © 2026 Vencord and Equicord contributors contributors</string>
+	<string>Copyright © 2026 Vencord, Equicord and Distra contributors</string>
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.utilities</string>
 	<key>LSMinimumSystemVersion</key>

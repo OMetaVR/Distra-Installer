@@ -46,10 +46,10 @@ func init() {
 }
 
 func GetInstallerDownloadLink() string {
-	const BaseUrl = "https://github.com/Equicord/Equilotl/releases/latest/download/"
+	const BaseUrl = "https://github.com/OMetaVR/Distra-Installer/releases/latest/download/"
 	switch runtime.GOOS {
 	case "windows":
-		filename := Ternary(buildinfo.UiType == buildinfo.UiTypeCli, "EquilotlCli", "Equilotl")
+		filename := Ternary(buildinfo.UiType == buildinfo.UiTypeCli, "DistraInstallerCli", "DistraInstaller")
 		if runtime.GOARCH == "arm64" {
 			filename += "-arm64"
 		}
@@ -57,17 +57,17 @@ func GetInstallerDownloadLink() string {
 	case "darwin":
 		switch runtime.GOARCH {
 		case "amd64":
-			return BaseUrl + "Equilotl-x64.dmg"
+			return BaseUrl + "DistraInstaller-x64.dmg"
 		case "arm64":
-			return BaseUrl + "Equilotl-arm64.dmg"
+			return BaseUrl + "DistraInstaller-arm64.dmg"
 		default:
 			return ""
 		}
 	case "linux":
 		if runtime.GOARCH == "arm64" {
-			return BaseUrl + "EquilotlCli-linux-arm64"
+			return BaseUrl + "DistraInstallerCli-linux-arm64"
 		}
-		return BaseUrl + "EquilotlCli-linux"
+		return BaseUrl + "DistraInstallerCli-linux"
 	default:
 		return ""
 	}
@@ -103,7 +103,7 @@ func UpdateSelf() error {
 	}
 	defer res.Body.Close()
 
-	tmp, err := os.CreateTemp(ownExeDir, "EquilotlUpdate")
+	tmp, err := os.CreateTemp(ownExeDir, "DistraInstallerUpdate")
 	if err != nil {
 		return fmt.Errorf("Failed to create tempfile: %w", err)
 	}

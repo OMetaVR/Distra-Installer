@@ -1,8 +1,10 @@
-# Equilotl
+# Distra Installer
 
-The Equicord Installer fork that allows you to install [Equicord 2, the ugliest Discord Desktop client mod](https://github.com/OMetaVR/Equicord) (this is a purely personal project, don't bug anyone about issues.)
+The installer for [Distra](https://github.com/OMetaVR/Distra-Desktop), a Discord desktop client mod. It's a fork of
+[Equilotl](https://github.com/Equicord/Equilotl), the Equicord installer, which is itself based on the Vencord installer.
+This is a personal project, so please don't take issues with it to the Equicord or Vencord teams.
 
-This is not an official thing, the name is a joke, do not take this seriously like at all. I just heard that we like to fork, so I made a fork out of a fork, so I could fork plugins in my fork to customize everything fully to my forking liking.
+Builds are unsigned, so Windows SmartScreen and macOS Gatekeeper will ask you to allow them the first time.
 
 ![image](https://i.imgur.com/oHN41ss.png)
 
@@ -10,17 +12,17 @@ This is not an official thing, the name is a joke, do not take this seriously li
 
 Windows
 
-| | X64 | ARM64 |
-| --- | --- | --- |
-| GUI | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/Equilotl.exe) | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/Equilotl-arm64.exe) |
-| CLI | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/EquilotlCli.exe) | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/EquilotlCli-arm64.exe) |
+| | X64 |
+| --- | --- |
+| GUI | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstaller.exe) |
+| CLI | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstallerCli.exe) |
 
 MacOS
 
-| | Universal | X64 | ARM64 |
-| --- | --- | --- | --- |
-| GUI | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/Equilotl.dmg) | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/Equilotl-x64.dmg) | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/Equilotl-arm64.dmg) |
-| CLI | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/EquilotlCli-universal) | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/EquilotlCli-x64) | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/EquilotlCli-arm64) |
+| | X64 | ARM64 |
+| --- | --- | --- |
+| GUI | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstaller-x64.dmg) | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstaller-arm64.dmg) |
+| CLI | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstallerCli-darwin-amd64) | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstallerCli-darwin-arm64) |
 
 The CLI builds are plain binaries, so run `chmod +x <file>` after downloading.
 
@@ -28,11 +30,16 @@ Linux
 
 | | X64 | ARM64 |
 | --- | --- | --- |
-| Combined GUI | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/Equilotl) | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/Equilotl-arm64) |
-| X11 GUI | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/Equilotl-x11) | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/Equilotl-x11-arm64) |
-| Wayland GUI | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/Equilotl-wayland) | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/Equilotl-wayland-arm64) |
-| CLI | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/EquilotlCli-linux) | [Download](https://github.com/Equicord/Equilotl/releases/latest/download/EquilotlCli-linux-arm64) |
+| Combined GUI | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstaller) | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstaller-arm64) |
+| X11 GUI | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstaller-x11) | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstaller-x11-arm64) |
+| Wayland GUI | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstaller-wayland) | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstaller-wayland-arm64) |
+| CLI | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstallerCli-linux) | [Download](https://github.com/OMetaVR/Distra-Installer/releases/latest/download/DistraInstallerCli-linux-arm64) |
 
+Or on Linux, in a terminal:
+
+```sh
+sh -c "$(curl -sS https://raw.githubusercontent.com/OMetaVR/Distra-Installer/main/install.sh)"
+```
 
 ## Building from source
 
@@ -95,4 +102,4 @@ go build --tags cli
 ```
 
 You might want to pass some flags to this command to get a better build.
-See [the GitHub workflow](https://github.com/Equicord/Equilotl/blob/main/.github/workflows/release.yml) for what flags I pass or if you want more precise instructions
+See [the GitHub workflow](https://github.com/OMetaVR/Distra-Installer/blob/main/.github/workflows/distra-release.yml) for what flags I pass or if you want more precise instructions

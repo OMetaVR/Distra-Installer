@@ -85,7 +85,7 @@ ifeq ($(shell command -v create-dmg 2>/dev/null),)
 	$(error create-dmg is not installed)
 endif
 	create-dmg \
-		--volname "Equilotl" \
+		--volname "Distra Installer" \
 		--volicon macos/icon.icns \
 		--background "macos/background.png" \
 		--window-pos 200 120 \

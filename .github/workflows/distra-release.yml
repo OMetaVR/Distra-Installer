@@ -1,0 +1,163 @@
+# Fork-only release workflow for Distra Installer. Upstream's release.yml signs and notarizes with Equicord's
+# certificates and only runs on v* tags, so this fork tags releases distra-v* and builds unsigned binaries here.
+name: Distra Release
+on:
+    push:
+        tags:
+            - distra-v*
+    workflow_dispatch:
+
+env:
+    FORCE_COLOR: true
+
+permissions:
+    contents: write
+
+jobs:
+    build-linux:
+        strategy:
+            matrix:
+                include:
+                    - arch: amd64
+                      runner: ubuntu-latest
+                      suffix: ""
+                    - arch: arm64
+                      runner: ubuntu-24.04-arm
+                      suffix: -arm64
+        runs-on: ${{ matrix.runner }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+              with:
+                  go-version-file: go.mod
+
+            - name: Install Linux dependencies
+              run: |
+                  sudo apt update
+                  sudo apt install -y pkg-config libsdl2-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libglx-dev libgl1-mesa-dev libxxf86vm-dev libglfw3-dev libwayland-dev libwayland-egl1 libegl-dev libxkbcommon-dev wayland-protocols extra-cmake-modules
+
+            - name: Recreate vendor and apply Wayland patches
+              run: |
+                  go mod vendor
+                  git apply patches/wayland.patch
+
+            - name: Build
+              run: |
+                  flags="-s -w -X 'equilotl/buildinfo.InstallerGitHash=${GITHUB_SHA::7}' -X 'equilotl/buildinfo.InstallerTag=${{ github.ref_name }}'"
+                  build() { CGO_ENABLED=1 GOOS=linux GOARCH=${{ matrix.arch }} go build -v -tags "$1" -ldflags "$flags" -o "$2"; }
+                  build static DistraInstaller-x11${{ matrix.suffix }}
+                  build "static wayland" DistraInstaller-wayland${{ matrix.suffix }}
+                  build "static combined" DistraInstaller${{ matrix.suffix }}
+                  build cli DistraInstallerCli-linux${{ matrix.suffix }}
+                  chmod +x DistraInstaller*
+
+            - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: linux-${{ matrix.arch }}
+                  path: DistraInstaller*
+
+    build-windows:
+        runs-on: windows-latest
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+              with:
+                  go-version-file: go.mod
+
+            - uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
+              with:
+                  path-type: inherit
+
+            - name: Install dependencies
+              shell: msys2 {0}
+              run: |
+                  pacman -S --noconfirm git mingw-w64-x86_64-gcc mingw-w64-x86_64-SDL2
+                  go install github.com/tc-hib/go-winres@d743268d7ea168077ddd443c4240562d4f5e8c3e  # v0.3.3
+
+            - name: Build
+              shell: msys2 {0}
+              run: |
+                  flags="-X 'equilotl/buildinfo.InstallerGitHash=${GITHUB_SHA::7}' -X 'equilotl/buildinfo.InstallerTag=${{ github.ref_name }}'"
+                  go-winres make --product-version "git-tag"
+                  CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build -v -tags "static gui" -ldflags "-s -w -H=windowsgui -extldflags=-static $flags" -o DistraInstaller.exe
+                  CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build -v -tags cli -ldflags "-s -w $flags" -o DistraInstallerCli.exe
+
+            - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: windows
+                  path: DistraInstaller*.exe
+
+    build-mac:
+        strategy:
+            matrix:
+                include:
+                    - arch: amd64
+                      runner: macos-15-intel
+                      dmg: DistraInstaller-x64.dmg
+                    - arch: arm64
+                      runner: macos-latest
+                      dmg: DistraInstaller-arm64.dmg
+        runs-on: ${{ matrix.runner }}
+        steps:
+            - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+            - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+              with:
+                  go-version-file: go.mod
+
+            - name: Install dependencies
+              run: brew install sdl2 create-dmg
+
+            # Ad-hoc signed (IDENTITY "-"): macOS will ask the user to allow it on first launch.
+            - name: Build DMG and CLI
+              run: |
+                  make ARCH=${{ matrix.arch }} GUI=1 DMG=1 VERSION=${{ github.ref_name }}
+                  mv build/Equilotl.dmg ${{ matrix.dmg }}
+                  make ARCH=${{ matrix.arch }} VERSION=${{ github.ref_name }}
+                  mv build/EquilotlCli-darwin DistraInstallerCli-darwin-${{ matrix.arch }}
+
+            - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+              with:
+                  name: mac-${{ matrix.arch }}
+                  path: |
+                      ${{ matrix.dmg }}
+                      DistraInstallerCli-darwin-${{ matrix.arch }}
+
+    release:
+        needs: [build-linux, build-windows, build-mac]
+        runs-on: ubuntu-latest
+        steps:
+            - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+              with:
+                  path: artifacts
+                  merge-multiple: true
+
+            - name: Publish release
+              env:
+                  GH_TOKEN: ${{ github.token }}
+                  TAG: ${{ github.ref_type == 'tag' && github.ref_name || format('distra-dev-{0}', github.run_number) }}
+              run: |
+                  gh release create "$TAG" artifacts/* --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+                      --title "Distra Installer $TAG" --latest \
+                      --notes "Unsigned builds of Distra Installer. Windows SmartScreen and macOS Gatekeeper will ask you to allow them on first run."
+
+    notify:
+        needs: [release]
+        if: always()
+        runs-on: ubuntu-latest
+        steps:
+            - name: Post result to Discord
+              env:
+                  WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+                  RESULT: ${{ needs.release.result }}
+                  RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+              run: |
+                  [ -n "$WEBHOOK" ] || exit 0
+                  if [ "$RESULT" = success ]; then
+                      msg="🚀 **Distra Installer \`${GITHUB_REF_NAME}\` released**\\n${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases"
+                  else
+                      msg="❌ **Distra Installer release failed** for \`${GITHUB_REF_NAME}\`\\n<@297075664530440192>\\n${RUN_URL}"
+                  fi
+                  curl -sS -H "Content-Type: application/json" -X POST -d "{\"content\":\"$msg\"}" "$WEBHOOK"

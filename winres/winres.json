@@ -9,7 +9,7 @@
   "RT_MANIFEST": {
     "#1": {
       "0409": {
-        "description": "An Installer for the Equicord Discord Mod",
+        "description": "An installer for the Distra Discord mod",
         "minimum-os": "win10",
         "execution-level": "as invoker",
         "dpi-awareness": "system"
@@ -22,10 +22,10 @@
         "info": {
           "0409": {
             "Comments": "Comments",
-            "CompanyName": "Equicord",
-            "FileDescription": "Equilotl",
-            "LegalCopyright": "© 2026 Vencord and Equicord contributors - GPL3.0",
-            "ProductName": "Equilotl",
+            "CompanyName": "Distra",
+            "FileDescription": "Distra Installer",
+            "LegalCopyright": "© 2026 Vencord, Equicord and Distra contributors - GPL3.0",
+            "ProductName": "Distra Installer",
             "ProductVersion": ""
           }
         }
