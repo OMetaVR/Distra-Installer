@@ -1,0 +1,324 @@
+<!doctype html>
+<!--
+  Distra Installer README demo. A frame-exact recreation of the installer: render.mjs calls renderAt(t)
+  for every frame and records a screenshot, so nothing here depends on wall-clock time.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Distra Installer demo</title>
+<style>
+@font-face { font-family: Inter; font-weight: 400; src: url(../../fonts/Inter-Regular.ttf); }
+@font-face { font-family: Inter; font-weight: 600; src: url(../../fonts/Inter-SemiBold.ttf); }
+@font-face { font-family: Inter; font-weight: 700; src: url(../../fonts/Inter-Bold.ttf); }
+@font-face { font-family: Plex; font-weight: 400; src: url(../../fonts/IBMPlexMono-Regular.ttf); }
+
+* { box-sizing: border-box; margin: 0; }
+html, body { width: 900px; height: 780px; overflow: hidden; }
+body {
+  font-family: Inter, sans-serif; color: #dbdee1; -webkit-font-smoothing: antialiased;
+  background: radial-gradient(1100px 620px at 50% -10%, #2c2f5a 0%, rgba(44,47,90,0) 60%), #17181b;
+}
+.stage { position: relative; width: 900px; height: 780px; }
+.window {
+  position: absolute; left: 40px; top: 34px; width: 820px; height: 660px; background: #313338; border-radius: 10px;
+  overflow: hidden; display: flex; flex-direction: column;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.06), 0 30px 70px rgba(0,0,0,.55);
+}
+.titlebar { height: 36px; flex-shrink: 0; background: #1e1f22; display: flex; align-items: center; justify-content: space-between; padding-left: 12px; }
+.titlebar .name { display: flex; align-items: center; gap: 8px; font-size: 12px; font-weight: 600; color: #b5bac1; }
+.titlebar img { width: 16px; height: 16px; }
+.wc { width: 46px; height: 36px; display: inline-flex; align-items: center; justify-content: center; color: #b5bac1; }
+.content { position: relative; flex: 1; }
+.screen { position: absolute; inset: 0; padding: 26px 32px 28px; display: flex; flex-direction: column; gap: 18px; }
+.mono { font-family: Plex, monospace; }
+
+.loc { display: flex; align-items: center; gap: 12px; background: #2b2d31; border-radius: 8px; padding: 12px 14px; }
+.loc .text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.label { font-size: 11px; font-weight: 700; color: #a5abb4; }
+.path { font-size: 12.5px; color: #dbdee1; }
+.hint { font-size: 12px; color: #a5abb4; }
+.hint .mono { color: #dbdee1; }
+.warn { display: flex; gap: 10px; align-items: flex-start; background: #39352f; border: 1px solid rgba(240,178,50,.35); border-radius: 8px; padding: 11px 14px; }
+.warn p { font-size: 13px; line-height: 19px; }
+.warn strong { color: #f5d08a; font-weight: 600; }
+.section { font-size: 12px; font-weight: 700; color: #b5bac1; margin-bottom: -10px; }
+.cards { display: flex; flex-direction: column; gap: 8px; }
+.card { display: flex; align-items: center; gap: 12px; background: #2b2d31; border-radius: 8px; padding: 11px 14px; border: 1px solid transparent; }
+.card.hover { background: #383a40; transform: translateY(-1px); }
+.card.selected { border-color: #5865f2; }
+.radio { width: 20px; height: 20px; border-radius: 999px; border: 2px solid #80848e; display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; }
+.card.selected .radio { border-color: #5865f2; }
+.dot { width: 10px; height: 10px; border-radius: 999px; background: #5865f2; }
+.card .name { font-size: 14px; font-weight: 600; color: #f2f3f5; display: flex; align-items: center; gap: 8px; }
+.card .sub { font-size: 12px; color: #a5abb4; margin-top: 2px; }
+.badge { font-size: 10px; font-weight: 700; color: #3dd27a; background: rgba(35,165,89,.15); border-radius: 4px; padding: 2px 6px; }
+.spacer { flex: 1; }
+.footer { display: flex; align-items: center; gap: 10px; border-top: 1px solid #3f4147; padding-top: 16px; }
+.btn { font: inherit; font-weight: 600; font-size: 14px; height: 38px; padding: 0 18px; border-radius: 6px; display: inline-flex; align-items: center; gap: 8px; border: 0; color: #fff; }
+.btn.small { height: 32px; padding: 0 12px; font-size: 13px; }
+.primary { background: #5865f2; } .primary.hover { background: #4c57d0; transform: translateY(-1px); } .primary.press { transform: scale(.98); }
+.secondary { background: #4e5058; } .secondary.hover { background: #6d6f78; }
+.ghost { background: transparent; color: #dbdee1; box-shadow: inset 0 0 0 1px #4e5058; }
+.danger { background: transparent; color: #f58f91; box-shadow: inset 0 0 0 1px rgba(218,55,60,.7); }
+
+.center { align-items: center; justify-content: center; padding: 0 92px; gap: 28px; }
+.head { display: flex; flex-direction: column; align-items: center; gap: 10px; }
+h2 { font-size: 18px; font-weight: 700; color: #f2f3f5; margin-top: 6px; }
+.subtitle { font-size: 13px; color: #a5abb4; }
+.progress { width: 100%; display: flex; flex-direction: column; gap: 8px; }
+.progress .row { display: flex; justify-content: space-between; font-size: 12px; font-weight: 600; color: #b5bac1; }
+.bar { position: relative; height: 8px; border-radius: 999px; background: #1e1f22; overflow: hidden; }
+.fill { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 999px; background: #5865f2; overflow: hidden; }
+.sheen { position: absolute; top: 0; bottom: 0; width: 35%; background: linear-gradient(90deg, transparent, rgba(255,255,255,.22), transparent); }
+.steps { width: 100%; display: flex; flex-direction: column; gap: 6px; background: #2b2d31; border-radius: 8px; padding: 12px 14px; }
+.step { display: flex; align-items: center; gap: 10px; height: 26px; font-size: 13px; }
+.ring { width: 16px; height: 16px; border-radius: 999px; border: 2px solid #4e5058; display: inline-flex; align-items: center; justify-content: center; }
+.ring.active { border-color: #5865f2; }
+.ring.active::after { content: ""; width: 6px; height: 6px; border-radius: 999px; background: #5865f2; }
+.done-title { font-size: 22px; font-weight: 700; color: #f2f3f5; text-align: center; }
+.done-sub { font-size: 13px; line-height: 19.5px; color: #a5abb4; max-width: 420px; text-align: center; }
+
+.cursor { position: absolute; left: 0; top: 0; width: 22px; height: 28px; pointer-events: none; filter: drop-shadow(0 2px 3px rgba(0,0,0,.45)); z-index: 10; }
+.ripple { position: absolute; width: 36px; height: 36px; margin: -18px 0 0 -18px; border-radius: 999px; border: 2px solid rgba(255,255,255,.75); z-index: 9; opacity: 0; }
+.caption { position: absolute; left: 0; right: 0; top: 718px; display: flex; justify-content: center; }
+.caption span { font-size: 15px; font-weight: 600; color: #f2f3f5; background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.09); border-radius: 999px; padding: 8px 16px; }
+.caption b { color: #8f98ff; font-weight: 700; margin-right: 8px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="window">
+    <div class="titlebar">
+      <div class="name"><img src="../../winres/icon.png" alt="">Distra Installer</div>
+      <div>
+        <span class="wc"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M2 6h8" stroke="currentColor" stroke-width="1.2"/></svg></span>
+        <span class="wc"><svg width="12" height="12" viewBox="0 0 12 12"><rect x="2" y="2" width="8" height="8" fill="none" stroke="currentColor" stroke-width="1.2"/></svg></span>
+        <span class="wc"><svg width="12" height="12" viewBox="0 0 12 12"><path d="M2.5 2.5l7 7M9.5 2.5l-7 7" stroke="currentColor" stroke-width="1.2"/></svg></span>
+      </div>
+    </div>
+    <div class="content">
+
+      <div class="screen" id="idle">
+        <div class="loc rise" data-delay=".11">
+          <svg width="20" height="20" viewBox="0 0 24 24" style="flex-shrink:0;color:#a5abb4"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/></svg>
+          <div class="text">
+            <span class="label">DOWNLOAD LOCATION</span>
+            <span class="path mono">C:\Users\you\AppData\Roaming\Equicord\equicord.asar</span>
+            <span class="hint">Set the <span class="mono">EQUICORD_USER_DATA_DIR</span> environment variable to change this, then restart the installer.</span>
+          </div>
+          <span class="btn small ghost"><svg width="14" height="14" viewBox="0 0 24 24"><path d="M14 4h6v6M20 4l-9 9M19 14v5a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1V6a1 1 0 0 1 1-1h5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Open folder</span>
+        </div>
+        <div class="warn rise" data-delay=".18">
+          <svg width="18" height="18" viewBox="0 0 24 24" style="flex-shrink:0;color:#f0b232;margin-top:1px"><path d="M12 3l10 18H2L12 3z" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/><path d="M12 10v5" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><circle cx="12" cy="18" r="1.2" fill="currentColor"/></svg>
+          <p><strong>GitHub is the only official place to get Distra.</strong> Any other site or repository not hosted by mmeta or claiming to be us is malicious. If you downloaded from somewhere else, uninstall it immediately, run a malware scan, and change your Discord password.</p>
+        </div>
+        <div class="rise" data-delay=".25" style="display:flex;flex-direction:column;gap:18px">
+          <span class="section">SELECT AN INSTALL TO PATCH</span>
+          <div class="cards">
+            <div class="card" id="card-stable"><span class="radio"><span class="dot"></span></span><span><span class="name">Stable<span class="badge" id="badge-stable">PATCHED</span></span><span class="sub mono" style="display:block">C:\Users\you\AppData\Local\Discord</span></span></div>
+            <div class="card" id="card-canary"><span class="radio"><span class="dot"></span></span><span><span class="name">Canary</span><span class="sub mono" style="display:block">C:\Users\you\AppData\Local\DiscordCanary</span></span></div>
+            <div class="card" id="card-custom"><span class="radio"><span class="dot"></span></span><span><span class="name">Custom install location</span><span class="sub mono" style="display:block">Point the installer at any Discord folder</span></span></div>
+          </div>
+        </div>
+        <div class="spacer"></div>
+        <div class="footer rise" data-delay=".32">
+          <span class="btn primary" id="btn-install"><svg width="16" height="16" viewBox="0 0 24 24"><path d="M12 4v11m0 0l-4-4m4 4l4-4M5 20h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>Install</span>
+          <span class="btn secondary">Reinstall / Repair</span>
+          <span class="btn ghost">Install OpenAsar</span>
+          <span class="spacer"></span>
+          <span class="btn danger">Uninstall</span>
+        </div>
+      </div>
+
+      <div class="screen center" id="working">
+        <div class="head rise" data-delay=".04">
+          <svg width="44" height="44" viewBox="0 0 44 44" id="spinner"><circle cx="22" cy="22" r="18" fill="none" stroke="#3f4147" stroke-width="4"/><path d="M22 4a18 18 0 0 1 18 18" fill="none" stroke="#5865f2" stroke-width="4" stroke-linecap="round"/></svg>
+          <h2>Installing Distra</h2>
+          <p class="subtitle">Working on Discord Stable. Keep Discord closed until this finishes.</p>
+        </div>
+        <div class="progress rise" data-delay=".11">
+          <div class="row"><span id="step-label">Fetching latest release</span><span id="pct">0%</span></div>
+          <div class="bar"><div class="fill" id="fill"><span class="sheen" id="sheen"></span></div></div>
+        </div>
+        <div class="steps rise" data-delay=".18" id="steps"></div>
+      </div>
+
+      <div class="screen center" id="done" style="gap:24px">
+        <svg width="72" height="72" viewBox="0 0 72 72" id="check"><circle cx="36" cy="36" r="34" fill="rgba(35,165,89,.14)"/><circle cx="36" cy="36" r="26" fill="#23a559"/><path id="check-path" d="M24 37l8.5 8.5L49 28" fill="none" stroke="#fff" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" stroke-dasharray="36"/></svg>
+        <div class="rise" data-delay=".11" style="display:flex;flex-direction:column;gap:8px;align-items:center">
+          <p class="done-title">Distra is installed</p>
+          <p class="done-sub">Restart Discord Stable to finish. You'll find the Distra section in User Settings.</p>
+        </div>
+        <div class="rise" data-delay=".18" style="display:flex;gap:10px">
+          <span class="btn primary" id="btn-restart">Restart Discord</span>
+          <span class="btn secondary">Back</span>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <div class="ripple" id="ripple"></div>
+  <svg class="cursor" id="cursor" viewBox="0 0 22 28"><path d="M2 2v20.5l5.6-5.2 3.6 8.2 3.4-1.5-3.6-8.1H18L2 2z" fill="#fff" stroke="#111" stroke-width="1.4" stroke-linejoin="round"/></svg>
+  <div class="caption"><span id="caption"></span></div>
+</div>
+
+<script>
+// ---- Timeline (seconds) ----
+const T = {
+  idleIn: 0,          // idle screen enters
+  pickAt: 1.9,        // click Stable
+  installAt: 3.4,     // click Install
+  working: 3.65,      // working screen enters
+  steps: [0.55, 2.0, 0.75, 0.6], // fetch, download, patch, verify
+  doneHold: 2.6,      // how long the done screen stays before the loop restarts
+};
+const workingEnd = T.working + T.steps.reduce((a, b) => a + b, 0) + 0.25;
+const DURATION = workingEnd + T.doneHold + 0.9;
+
+const STEPS = ["Fetching latest release", "Downloading Distra", "Patching Discord Stable", "Verifying the patch"];
+const clamp = v => Math.max(0, Math.min(1, v));
+const easeOut = t => 1 - Math.pow(1 - clamp(t), 3);
+const easeInOut = t => { t = clamp(t); return t < .5 ? 4 * t * t * t : 1 - Math.pow(-2 * t + 2, 3) / 2; };
+const pop = t => { t = clamp(t / .5); return t < .7 ? .5 + easeOut(t / .7) * .62 : 1.12 - (t - .7) / .3 * .12; };
+
+const $ = id => document.getElementById(id);
+const stepsEl = $("steps");
+for (const s of STEPS) stepsEl.insertAdjacentHTML("beforeend", `<div class="step"><span class="icon"></span><span class="text">${s}</span></div>`);
+
+function applyRise(screen, since, t) {
+  for (const el of screen.querySelectorAll(".rise")) {
+    const e = easeOut((t - since - parseFloat(el.dataset.delay)) / .55);
+    el.style.opacity = e;
+    el.style.transform = `translateY(${(1 - e) * 10}px)`;
+  }
+}
+
+// Element centers in stage coordinates, measured once with everything visible.
+const centers = {};
+function measure() {
+  for (const s of ["idle", "working", "done"]) $(s).style.display = "flex";
+  for (const id of ["card-stable", "btn-install", "btn-restart"]) {
+    const r = $(id).getBoundingClientRect();
+    centers[id] = [r.left + r.width * .5, r.top + r.height * .55];
+  }
+}
+
+// Cursor keyframes: [time, x, y]
+function cursorAt(t) {
+  const c = centers;
+  const keys = [
+    [0, 760, 640], [0.9, 760, 640],
+    [1.7, c["card-stable"][0] - 120, c["card-stable"][1]], [T.pickAt + .4, c["card-stable"][0] - 120, c["card-stable"][1]],
+    [3.15, c["btn-install"][0] + 4, c["btn-install"][1]], [T.installAt + .5, c["btn-install"][0] + 4, c["btn-install"][1]],
+    [T.working + 1.2, 560, 620], [workingEnd + .7, 560, 620],
+    [workingEnd + 1.5, c["btn-restart"][0] + 6, c["btn-restart"][1]], [DURATION, c["btn-restart"][0] + 6, c["btn-restart"][1]],
+  ];
+  for (let i = 1; i < keys.length; i++) {
+    const [t0, x0, y0] = keys[i - 1], [t1, x1, y1] = keys[i];
+    if (t <= t1) { const e = easeInOut((t - t0) / (t1 - t0 || 1)); return [x0 + (x1 - x0) * e, y0 + (y1 - y0) * e]; }
+  }
+  return keys[keys.length - 1].slice(1);
+}
+
+function renderAt(t) {
+  const screen = t < T.working ? "idle" : t < workingEnd ? "working" : "done";
+  for (const s of ["idle", "working", "done"]) $(s).style.display = s === screen ? "flex" : "none";
+
+  // Idle: Canary starts selected, the cursor picks Stable, then clicks Install.
+  const pickedStable = t >= T.pickAt;
+  for (const id of ["card-stable", "card-canary", "card-custom"]) {
+    const sel = id === (pickedStable ? "card-stable" : "card-canary");
+    $(id).classList.toggle("selected", sel);
+    const dot = $(id).querySelector(".dot");
+    const since = id === "card-stable" ? T.pickAt : -10;
+    dot.style.display = sel ? "block" : "none";
+    dot.style.transform = `scale(${sel ? pop(t - since) : 0})`;
+  }
+  const [cx, cy] = cursorAt(t);
+  const near = (id, r) => Math.hypot(cx - centers[id][0], cy - centers[id][1]) < r;
+  $("card-stable").classList.toggle("hover", screen === "idle" && t > 1.55 && t < 2.6);
+  $("badge-stable").style.display = "none";
+  $("btn-install").classList.toggle("hover", screen === "idle" && near("btn-install", 40));
+  $("btn-install").classList.toggle("press", t > T.installAt && t < T.installAt + .12);
+  $("btn-restart").classList.toggle("hover", screen === "done" && near("btn-restart", 50));
+  if (screen === "idle") applyRise($("idle"), T.idleIn, t);
+  if (screen === "idle" && t > T.working - .25) $("idle").style.opacity = 1 - (t - (T.working - .25)) / .25;
+  else $("idle").style.opacity = 1;
+
+  // Working
+  if (screen === "working") {
+    const w = $("working");
+    applyRise(w, T.working, t);
+    $("spinner").style.transform = `rotate(${(t - T.working) * 360}deg)`;
+    let acc = T.working + .15, step = STEPS.length, frac = 0;
+    const doneAt = [];
+    for (let i = 0; i < STEPS.length; i++) {
+      if (t < acc + T.steps[i]) { step = i; frac = (t - acc) / T.steps[i]; break; }
+      acc += T.steps[i]; doneAt.push(acc);
+    }
+    // Only the download moves the bar within its step; the others jump when they finish.
+    const within = step === 1 ? easeInOut(frac) : 0;
+    const target = (Math.min(step, STEPS.length) + within) / STEPS.length;
+    const shown = Math.min(1, target);
+    $("fill").style.width = `${shown * 100}%`;
+    $("sheen").style.left = `${(-120 + ((t * 1000) % 1800) / 1800 * 440)}%`;
+    $("pct").textContent = `${Math.round(shown * 100)}%`;
+    $("step-label").textContent = STEPS[Math.min(step, STEPS.length - 1)];
+    [...stepsEl.children].forEach((row, i) => {
+      const icon = row.querySelector(".icon"), text = row.querySelector(".text");
+      if (i < step) {
+        const s = pop(t - doneAt[i]);
+        icon.innerHTML = `<svg width="16" height="16" viewBox="0 0 16 16" style="transform:scale(${s})"><circle cx="8" cy="8" r="8" fill="#23a559"/><path d="M4.5 8.3l2.3 2.3 4.7-4.9" fill="none" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+        text.style.color = "#dbdee1";
+      } else if (i === step) {
+        icon.innerHTML = `<span class="ring active" style="opacity:${.65 + .35 * Math.cos((t - T.working) * 2 * Math.PI / 1.2)}"></span>`;
+        text.style.color = "#f2f3f5";
+      } else {
+        icon.innerHTML = `<span class="ring"></span>`;
+        text.style.color = "#80848e";
+      }
+    });
+  }
+
+  // Done
+  if (screen === "done") {
+    const d = $("done");
+    applyRise(d, workingEnd, t);
+    const since = t - workingEnd;
+    $("check").style.transform = `scale(${pop(since)})`;
+    $("check").style.opacity = clamp(since / .35);
+    $("check-path").style.strokeDashoffset = 36 * (1 - clamp((since - .3) / .45));
+    // Fade to black-ish right before the loop restarts, so the GIF loops smoothly.
+    const out = clamp((t - (DURATION - .45)) / .45);
+    document.querySelector(".window").style.opacity = 1 - out;
+  } else {
+    document.querySelector(".window").style.opacity = clamp(t / .35);
+  }
+
+  // Cursor and click ripple
+  $("cursor").style.transform = `translate(${cx - 3}px, ${cy - 3}px)`;
+  $("cursor").style.opacity = screen === "done" ? 1 - clamp((t - (DURATION - .45)) / .45) : clamp((t - .7) / .3);
+  const clicks = [[T.pickAt, "card-stable"], [T.installAt, "btn-install"]];
+  const click = clicks.find(([at]) => t >= at && t < at + .45);
+  const ripple = $("ripple");
+  if (click) {
+    const k = (t - click[0]) / .45;
+    ripple.style.opacity = .9 * (1 - k);
+    ripple.style.transform = `translate(${cx}px, ${cy}px) scale(${.4 + k * .8})`;
+  } else ripple.style.opacity = 0;
+
+  // Captions
+  const caption = t < T.installAt - .2 ? ["1", "Pick your Discord"] : t < workingEnd ? ["2", "Install Distra"] : ["3", "Restart Discord and you're done"];
+  $("caption").innerHTML = `<b>${caption[0]}</b>${caption[1]}`;
+  const captionFade = Math.min(clamp((t - .9) / .4), screen === "done" ? 1 - clamp((t - (DURATION - .45)) / .45) : 1);
+  $("caption").parentElement.style.opacity = captionFade;
+}
+
+window.DEMO_DURATION = DURATION;
+window.renderAt = renderAt;
+document.fonts.ready.then(() => { measure(); renderAt(0); window.demoReady = true; });
+</script>
+</body>
+</html>

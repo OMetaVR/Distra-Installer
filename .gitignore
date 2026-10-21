@@ -6,3 +6,6 @@ vencord
 vendor
 build
 .DS_Store
+
+# Output of docs/demo/render.mjs PREVIEW mode
+demo-preview/

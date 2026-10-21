@@ -6,7 +6,7 @@ This is a personal project, so please don't take issues with it to the Equicord 
 
 Builds are unsigned, so Windows SmartScreen and macOS Gatekeeper will ask you to allow them the first time.
 
-![image](https://i.imgur.com/oHN41ss.png)
+![Distra Installer: pick your Discord, install, restart](docs/installer-demo.gif)
 
 ## Usage
 
