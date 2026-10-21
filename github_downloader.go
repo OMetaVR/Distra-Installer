@@ -32,6 +32,23 @@ var ReleaseData GithubRelease
 var GithubError error
 var GithubDoneChan chan bool
 
+// DownloadProgress, when set, is called while desktop.asar downloads. total is -1 if unknown.
+var DownloadProgress func(read, total int64)
+
+type progressReader struct {
+	r           io.Reader
+	read, total int64
+}
+
+func (p *progressReader) Read(b []byte) (int, error) {
+	n, err := p.r.Read(b)
+	p.read += int64(n)
+	if DownloadProgress != nil {
+		DownloadProgress(p.read, p.total)
+	}
+	return n, err
+}
+
 var InstalledHash = "None"
 var LatestHash = "Unknown"
 var IsDevInstall bool
@@ -181,7 +198,7 @@ func installLatestBuilds() (retErr error) {
 		retErr = err
 		return
 	}
-	read, err := io.Copy(out, res.Body)
+	read, err := io.Copy(out, &progressReader{r: res.Body, total: res.ContentLength})
 	if err != nil {
 		Log.Error("Failed to download to", EquicordDirectory+":", err)
 		retErr = err

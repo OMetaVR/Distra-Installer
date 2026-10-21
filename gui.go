@@ -14,17 +14,20 @@ import (
 	"errors"
 	"image"
 	"image/color"
+	"math"
+	"os"
+	path "path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
 
 	g "github.com/AllenDang/giu"
 	"github.com/AllenDang/imgui-go"
 
 	// png decoder for icon
 	_ "image/png"
-	"os"
-	path "path/filepath"
-	"runtime"
-	"strconv"
-	"strings"
 )
 
 var (
@@ -33,6 +36,7 @@ var (
 	customChoiceIdx int
 
 	customDir              string
+	customFocused          bool
 	autoCompleteDir        string
 	autoCompleteFile       string
 	autoCompleteCandidates []string
@@ -47,7 +51,6 @@ var (
 
 	acceptedOpenAsar   bool
 	showedUpdatePrompt bool
-	showCustomLocation bool
 
 	win *g.MasterWindow
 )
@@ -66,6 +69,7 @@ func main() {
 
 	go func() {
 		<-GithubDoneChan
+		githubDone = true
 		g.Update()
 	}()
 
@@ -74,38 +78,119 @@ func main() {
 		g.Update()
 	}()
 
-	var linuxFlags g.MasterWindowFlags = 0
 	if runtime.GOOS == "linux" {
 		os.Setenv("GDK_SCALE", "1")
 		os.Setenv("GDK_DPI_SCALE", "1")
 	}
 
-	win = g.NewMasterWindow("Distra Installer", 1200, 800, linuxFlags)
+	loadFonts()
+	win = g.NewMasterWindow("Distra Installer", 820, 660, 0)
+	win.SetBgColor(colBackground)
 
 	icon, _, err := image.Decode(bytes.NewReader(iconBytes))
 	if err != nil {
 		Log.Warn("Failed to load application icon", err)
-		Log.Debug(iconBytes, len(iconBytes))
 	} else {
 		win.SetIcon([]image.Image{icon})
 	}
 
+	setScreen(previewScreen())
 	win.Run(loop)
 }
 
-type CondWidget struct {
-	predicate  bool
-	ifWidget   func() g.Widget
-	elseWidget func() g.Widget
+// --- Screens ---
+
+type screenID int
+
+const (
+	screenIdle screenID = iota
+	screenWorking
+	screenDone
+)
+
+var (
+	screenMu    sync.Mutex
+	screen      = screenIdle
+	screenSince = time.Now()
+)
+
+func setScreen(s screenID) {
+	screenMu.Lock()
+	screen, screenSince = s, time.Now()
+	screenMu.Unlock()
+	if s == screenIdle {
+		// Patching changes what each install reports, so look again.
+		selected := radioIdx
+		discords = FindDiscords()
+		customChoiceIdx = len(discords)
+		radioIdx = min(selected, customChoiceIdx)
+	}
+	keepAnimating(1500 * time.Millisecond)
+	g.Update()
 }
 
-func (w *CondWidget) Build() {
-	if w.predicate {
-		w.ifWidget().Build()
-	} else if w.elseWidget != nil {
-		w.elseWidget().Build()
+func currentScreen() (screenID, time.Time) {
+	screenMu.Lock()
+	defer screenMu.Unlock()
+	return screen, screenSince
+}
+
+// previewScreen lets DISTRA_INSTALLER_PREVIEW=working|done open straight on those screens with sample progress,
+// for checking the design without installing anything.
+func previewScreen() screenID {
+	kind := os.Getenv("DISTRA_INSTALLER_PREVIEW")
+	if kind != "working" && kind != "done" {
+		return screenIdle
+	}
+	op := &operation{kind: opInstall, target: &DiscordInstall{branch: "stable"}, name: "Discord Stable"}
+	op.steps = []string{"Fetching latest release", "Downloading Distra", "Patching Discord Stable", "Verifying the patch"}
+	op.stepDoneAt = []time.Time{time.Now(), time.Now(), {}, {}}
+	op.step, op.stepFraction, op.shownProgress = 2, .32, .58
+	currentOp = op
+	return Ternary(kind == "working", screenWorking, screenDone)
+}
+
+// --- Popups. Operations run in the background, so popups are queued and opened on the next frame. ---
+
+var (
+	popupMu       sync.Mutex
+	pendingPopups []string
+)
+
+func openPopup(id string) {
+	popupMu.Lock()
+	pendingPopups = append(pendingPopups, id)
+	popupMu.Unlock()
+	g.Update()
+}
+
+func flushPopups() {
+	popupMu.Lock()
+	ids := pendingPopups
+	pendingPopups = nil
+	popupMu.Unlock()
+	for _, id := range ids {
+		g.OpenPopup(id)
 	}
 }
+
+func ShowModal(title, desc, extra string) {
+	modalTitle = title
+	modalMessage = desc
+	modalExtra = extra
+	modalId++
+	openPopup("#modal" + strconv.Itoa(modalId))
+}
+
+func HandleScuffedInstall() {
+	openPopup("#scuffed-install")
+}
+
+func HandleInsufficientPermissions() {
+	openPopup("#insufficient-permissions")
+}
+
+// --- Actions ---
 
 func getChosenInstall() *DiscordInstall {
 	if radioIdx != customChoiceIdx {
@@ -120,7 +205,7 @@ func getChosenInstall() *DiscordInstall {
 		return discord
 	}
 
-	g.OpenPopup("#invalid-custom-location")
+	openPopup("#invalid-custom-location")
 	return nil
 }
 
@@ -136,48 +221,22 @@ func InstallLatestBuilds() (err error) {
 	return
 }
 
-func handlePatch() {
-	choice := getChosenInstall()
-	if choice != nil {
-		choice.Patch()
-	}
-}
-
-func handleUnpatch() {
-	choice := getChosenInstall()
-	if choice != nil {
-		choice.Unpatch()
+func run(kind opKind) {
+	if di := getChosenInstall(); di != nil {
+		startOperation(kind, di)
 	}
 }
 
 func handleOpenAsar() {
-	if acceptedOpenAsar || getChosenInstall().IsOpenAsar() {
-		handleOpenAsarConfirmed()
+	di := getChosenInstall()
+	if di == nil {
 		return
 	}
-
-	g.OpenPopup("#openasar-confirm")
-}
-
-func handleOpenAsarConfirmed() {
-	choice := getChosenInstall()
-	if choice != nil {
-		if choice.IsOpenAsar() {
-			if err := choice.UninstallOpenAsar(); err != nil {
-				handleErr(choice, err, "uninstall OpenAsar from")
-			} else {
-				g.OpenPopup("#openasar-unpatched")
-				g.Update()
-			}
-		} else {
-			if err := choice.InstallOpenAsar(); err != nil {
-				handleErr(choice, err, "install OpenAsar on")
-			} else {
-				g.OpenPopup("#openasar-patched")
-				g.Update()
-			}
-		}
+	if acceptedOpenAsar || di.IsOpenAsar() {
+		startOperation(opOpenAsar, di)
+		return
 	}
+	openPopup("#openasar-confirm")
 }
 
 func handleErr(di *DiscordInstall, err error, action string) {
@@ -199,40 +258,30 @@ func handleErr(di *DiscordInstall, err error, action string) {
 		}
 	}
 
-	ShowModal("Failed to "+action+" this Install.", "If this issue persists, visit: "+SupportUrl, err.Error())
+	ShowModal("Failed to "+action+" this install", "If this issue persists, visit "+SupportUrl+" for help.", err.Error())
 }
 
-func HandleScuffedInstall() {
-	g.OpenPopup("#scuffed-install")
-}
-
-func HandleInsufficientPermissions() {
-	g.OpenPopup("#insufficient-permissions")
-}
-
+// Patch and Unpatch are kept for code shared with the CLI. The GUI goes through startOperation instead.
 func (di *DiscordInstall) Patch() {
 	if CheckScuffedInstall() {
 		return
 	}
 	if err := di.patch(); err != nil {
 		handleErr(di, err, "patch")
-	} else {
-		g.OpenPopup("#patched")
 	}
 }
 
 func (di *DiscordInstall) Unpatch() {
 	if err := di.unpatch(); err != nil {
 		handleErr(di, err, "unpatch")
-	} else {
-		g.OpenPopup("#unpatched")
 	}
 }
+
+// --- Custom location autocomplete (Tab completes the next matching entry) ---
 
 func onCustomInputChanged() {
 	p := customDir
 	if len(p) != 0 {
-		// Select the custom option for people
 		radioIdx = customChoiceIdx
 	}
 
@@ -243,13 +292,11 @@ func onCustomInputChanged() {
 
 	if isNewDir || wentUpADir {
 		autoCompleteDir = dir
-		// reset all the funnies
 		autoCompleteIdx = 0
 		lastAutoComplete = ""
 		autoCompleteFile = ""
 		autoCompleteCandidates = nil
 
-		// Generate autocomplete items
 		files, err := os.ReadDir(dir)
 		if err == nil {
 			for _, file := range files {
@@ -257,7 +304,6 @@ func onCustomInputChanged() {
 			}
 		}
 	} else if !didAutoComplete {
-		// reset auto complete and update our file
 		autoCompleteFile = path.Base(p)
 		lastAutoComplete = ""
 	}
@@ -269,414 +315,68 @@ func onCustomInputChanged() {
 	didAutoComplete = false
 }
 
-// go can you give me []any?
-// to pass to giu RangeBuilder?
-// yeeeeees
-// actually returns []string like a boss
-func makeAutoComplete() []any {
+func makeAutoComplete() []string {
 	input := strings.ToLower(autoCompleteFile)
 
-	var candidates []any
+	var candidates []string
 	for _, e := range autoCompleteCandidates {
-		file := strings.ToLower(e)
-		if autoCompleteFile == "" || strings.HasPrefix(file, input) {
+		if autoCompleteFile == "" || strings.HasPrefix(strings.ToLower(e), input) {
 			candidates = append(candidates, e)
 		}
 	}
 	return candidates
 }
 
-func makeRadioOnChange(i int) func() {
-	return func() {
-		radioIdx = i
+func autoCompleteCallback(candidates []string) imgui.InputTextCallback {
+	return func(data imgui.InputTextCallbackData) int32 {
+		if len(candidates) == 0 {
+			return 0
+		}
+		if autoCompleteIdx >= len(candidates) {
+			autoCompleteIdx = 0
+		}
+
+		didAutoComplete = true
+
+		start := len(customDir)
+		if lastAutoComplete != "" {
+			start -= len(lastAutoComplete)
+			data.DeleteBytes(start, len(lastAutoComplete))
+		} else if autoCompleteFile != "" {
+			start -= len(autoCompleteFile)
+			data.DeleteBytes(start, len(autoCompleteFile))
+		}
+
+		lastAutoComplete = candidates[autoCompleteIdx]
+		data.InsertBytes(start, []byte(lastAutoComplete))
+		autoCompleteIdx++
+
+		return 0
 	}
 }
 
-func Tooltip(label string) g.Widget {
-	return g.Style().
-		SetStyle(g.StyleVarWindowPadding, 10, 8).
-		SetStyleFloat(g.StyleVarWindowRounding, 8).
-		To(
-			g.Tooltip(label),
-		)
-}
+// --- Layout ---
 
-func InfoModal(id, title, description string) g.Widget {
-	return RawInfoModal(id, title, description, "", false)
-}
+const (
+	padX      = 32
+	padTop    = 26
+	padBottom = 28
+	gap       = 18
+	footerH   = 38 + 16 + 1 // buttons, padding above them, divider
+)
 
-func InfoModalExtra(id, title, description, extra string) g.Widget {
-	return RawInfoModal(id, title, description, extra, false)
-}
-
-func RawInfoModal(id, title, description, extra string, isOpenAsar bool) g.Widget {
-	isDynamic := strings.HasPrefix(id, "#modal") && extra != ""
-	return g.Style().
-		SetStyle(g.StyleVarWindowPadding, 30, 30).
-		SetStyleFloat(g.StyleVarWindowRounding, 12).
-		To(
-			g.PopupModal(id).
-				Flags(g.WindowFlagsNoTitleBar|Ternary(isDynamic, g.WindowFlagsAlwaysAutoResize, 0)).
-				Layout(
-					g.Style().SetFontSize(30).To(
-						g.Label(title),
-					),
-					g.Dummy(0, 5),
-					g.Style().SetFontSize(20).To(
-						g.Label(description),
-					),
-					&CondWidget{extra != "", func() g.Widget {
-						return g.Column(
-							g.Dummy(0, 10),
-							g.Style().SetFontSize(20).To(
-								g.Label(extra).Wrapped(true),
-							),
-						)
-					}, nil},
-					&CondWidget{id == "#scuffed-install", func() g.Widget {
-						return g.Column(
-							g.Dummy(0, 10),
-							g.Button("Take me there!").OnClick(func() {
-								// this issue only exists on windows so using Windows specific path is oki
-								username := os.Getenv("USERNAME")
-								programData := os.Getenv("PROGRAMDATA")
-								g.OpenURL("file://" + path.Join(programData, username))
-							}).Size(200, 30),
-						)
-					}, nil},
-					g.Dummy(0, 20),
-					&CondWidget{id == "#insufficient-permissions", func() g.Widget {
-						return g.Column(
-							g.Dummy(0, 10),
-							g.Button("Open Settings").OnClick(func() {
-								// "App Management" permissions doesnt exist on Monterey, just use full disk access for now
-								g.OpenURL("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
-							}).Size(200, 30),
-						)
-					}, nil},
-					&CondWidget{isOpenAsar,
-						func() g.Widget {
-							return g.Row(
-								g.Button("Accept").
-									OnClick(func() {
-										acceptedOpenAsar = true
-										g.CloseCurrentPopup()
-									}).
-									Size(100, 30),
-								g.Button("Cancel").
-									OnClick(func() {
-										g.CloseCurrentPopup()
-									}).
-									Size(100, 30),
-							)
-						},
-						func() g.Widget {
-							return g.Button("Ok").
-								OnClick(func() {
-									g.CloseCurrentPopup()
-								}).
-								Size(100, 30)
-						},
-					},
-				),
-		)
-}
-
-func UpdateModal() g.Widget {
-	return g.Style().
-		SetStyle(g.StyleVarWindowPadding, 30, 30).
-		SetStyleFloat(g.StyleVarWindowRounding, 12).
-		To(
-			g.PopupModal("#update-prompt").
-				Flags(g.WindowFlagsNoTitleBar | g.WindowFlagsAlwaysAutoResize).
-				Layout(
-					g.Align(g.AlignCenter).To(
-						g.Style().SetFontSize(30).To(
-							g.Label("Your Installer is outdated!"),
-						),
-						g.Style().SetFontSize(20).To(
-							g.Label(
-								"Would you like to update now?\n\n"+
-									"Once you press Update Now, the new installer will automatically be downloaded.\n"+
-									"The installer will temporarily seem unresponsive. Just wait!\n"+
-									"Once the update is done, the Installer will automatically reopen.\n\n"+
-									"On MacOs, Auto updates are not supported, so it will instead open in browser.",
-							),
-						),
-						g.Row(
-							g.Button("Update Now").
-								OnClick(func() {
-									if runtime.GOOS == "darwin" {
-										g.CloseCurrentPopup()
-										g.OpenURL(GetInstallerDownloadLink())
-										return
-									}
-
-									err := UpdateSelf()
-									g.CloseCurrentPopup()
-
-									if err != nil {
-										ShowModal("Failed to update self!", "Please manually download the latest Installer.", err.Error())
-									} else {
-										if err = RelaunchSelf(); err != nil {
-											ShowModal("Failed to restart self!", "Please manually restart the Installer.", err.Error())
-										}
-									}
-								}).
-								Size(100, 30),
-							g.Button("Later").
-								OnClick(func() {
-									g.CloseCurrentPopup()
-								}).
-								Size(100, 30),
-						),
-					),
-				),
-		)
-}
-
-func ShowModal(title, desc, extra string) {
-	modalTitle = title
-	modalMessage = desc
-	modalExtra = extra
-	modalId++
-	g.OpenPopup("#modal" + strconv.Itoa(modalId))
-}
-
-func renderInstaller() g.Widget {
-	candidates := makeAutoComplete()
-
-	wi, _ := win.GetSize()
-	w := float32(wi) - 96
-
-	var currentDiscord *DiscordInstall
-	if radioIdx != customChoiceIdx {
-		currentDiscord = discords[radioIdx].(*DiscordInstall)
-	}
-	var isOpenAsar = currentDiscord != nil && currentDiscord.IsOpenAsar()
-
-	if CanUpdateSelf() && !showedUpdatePrompt {
-		showedUpdatePrompt = true
-		g.OpenPopup("#update-prompt")
-	}
-
-	layout := g.Layout{
-		g.Style().SetFontSize(20).To(
-			renderErrorCard(
-				DiscordYellow,
-				color.Black,
-				"**GitHub** is the only official place to get Distra. Any other site claiming to be us is malicious.\n"+
-					"If you downloaded from any other source, you should delete / uninstall everything immediately, run a malware scan and change your Discord password.",
-				90,
-			),
-		),
-
-		g.Dummy(0, 20),
-
-		g.Style().SetFontSize(30).To(
-			g.Label("Please select an install to patch"),
-		),
-		g.Dummy(0, 10),
-
-		&CondWidget{len(discords) == 0, func() g.Widget {
-			s := "No Discord installs found. You first need to install Discord."
-			if runtime.GOOS == "linux" {
-				s += " snap is not supported."
-			}
-
-			return &CondWidget{!showCustomLocation, func() g.Widget {
-				return g.Column(
-					g.Style().SetFontSize(25).To(g.Label(s)),
-					g.Dummy(0, 10),
-					g.Checkbox("I am an advanced user and have Discord installed at a different location", &showCustomLocation),
-				)
-			}, nil}
-		}, nil},
-
-		g.Style().SetFontSize(20).To(
-			g.RangeBuilder("Discords", discords, func(i int, v any) g.Widget {
-				d := v.(*DiscordInstall)
-				var text string
-				switch d.branch {
-				case "ptb":
-					text = "Discord PTB"
-				case "canary":
-					text = "Discord Canary"
-				case "development":
-					text = "Discord Development"
-				default:
-					text = "Discord"
-				}
-
-				if d.isPatched {
-					text += " (Distra Installed)"
-				}
-
-				return g.Row(
-					g.RadioButton(text, radioIdx == i).OnChange(makeRadioOnChange(i)),
-					g.Style().SetColor(g.StyleColorText, color.RGBA{0xff, 0xff, 0xff, 0x80}).To(g.Label(" "+d.path)),
-				)
-			}),
-			&CondWidget{showCustomLocation, func() g.Widget {
-				return g.RadioButton("Custom Install Location", radioIdx == customChoiceIdx).OnChange(makeRadioOnChange(customChoiceIdx))
-			}, nil},
-		),
-
-		&CondWidget{showCustomLocation, func() g.Widget {
-			return g.Column(
-				g.Dummy(0, 5),
-				g.Style().
-					SetStyle(g.StyleVarFramePadding, 16, 16).
-					SetFontSize(20).
-					To(
-						g.InputText(&customDir).Hint("The custom location").
-							Size(w-16).
-							Flags(g.InputTextFlagsCallbackCompletion).
-							OnChange(onCustomInputChanged).
-							// this library has its own autocomplete but it's broken
-							Callback(
-								func(data imgui.InputTextCallbackData) int32 {
-									if len(candidates) == 0 {
-										return 0
-									}
-									// just wrap around
-									if autoCompleteIdx >= len(candidates) {
-										autoCompleteIdx = 0
-									}
-
-									// used by change handler
-									didAutoComplete = true
-
-									start := len(customDir)
-									// Delete previous auto complete
-									if lastAutoComplete != "" {
-										start -= len(lastAutoComplete)
-										data.DeleteBytes(start, len(lastAutoComplete))
-									} else if autoCompleteFile != "" { // delete partial input
-										start -= len(autoCompleteFile)
-										data.DeleteBytes(start, len(autoCompleteFile))
-									}
-
-									// Insert auto complete
-									lastAutoComplete = candidates[autoCompleteIdx].(string)
-									data.InsertBytes(start, []byte(lastAutoComplete))
-									autoCompleteIdx++
-
-									return 0
-								},
-							),
-					),
-				g.RangeBuilder("AutoComplete", candidates, func(i int, v any) g.Widget {
-					dir := v.(string)
-					return g.Label(dir)
-				}),
-			)
-		}, nil},
-
-		g.Dummy(0, 20),
-
-		g.Style().SetFontSize(20).To(
-			g.Row(
-				g.Style().
-					SetColor(g.StyleColorButton, DiscordGreen).
-					SetColor(g.StyleColorButtonHovered, DiscordGreenHovered).
-					SetStyle(g.StyleVarFrameRounding, 8, 8).
-					SetDisabled(GithubError != nil).
-					To(
-						g.Button("Install").
-							OnClick(handlePatch).
-							Size((w-40)/4, 50),
-						Tooltip("Patch the selected Discord Install"),
-					),
-				g.Style().
-					SetColor(g.StyleColorButton, DiscordBlue).
-					SetColor(g.StyleColorButtonHovered, DiscordBlueHovered).
-					SetStyle(g.StyleVarFrameRounding, 8, 8).
-					SetDisabled(GithubError != nil).
-					To(
-						g.Button("Reinstall / Repair").
-							OnClick(func() {
-								if IsDevInstall {
-									handlePatch()
-								} else {
-									err := InstallLatestBuilds()
-									if err == nil {
-										handlePatch()
-									}
-								}
-							}).
-							Size((w-40)/4, 50),
-						Tooltip("Reinstall & Update Distra"),
-					),
-				g.Style().
-					SetColor(g.StyleColorButton, DiscordRed).
-					SetColor(g.StyleColorButtonHovered, DiscordRedHovered).
-					SetStyle(g.StyleVarFrameRounding, 8, 8).
-					To(
-						g.Button("Uninstall").
-							OnClick(handleUnpatch).
-							Size((w-40)/4, 50),
-						Tooltip("Unpatch the selected Discord Install"),
-					),
-				g.Style().
-					SetColor(g.StyleColorButton, Ternary(isOpenAsar, DiscordRed, DiscordGreen)).
-					SetColor(g.StyleColorButtonHovered, Ternary(isOpenAsar, DiscordRedHovered, DiscordGreenHovered)).
-					SetStyle(g.StyleVarFrameRounding, 8, 8).
-					To(
-						g.Button(Ternary(isOpenAsar, "Uninstall OpenAsar", Ternary(currentDiscord != nil, "Install OpenAsar", "(Un-)Install OpenAsar"))).
-							OnClick(handleOpenAsar).
-							Size((w-40)/4, 50),
-						Tooltip("Manage OpenAsar"),
-					),
-			),
-		),
-
-		InfoModal("#patched", "Installed!", "Distra was successfully installed!"),
-		InfoModal("#unpatched", "Uninstalled", "Distra has been uninstalled!"),
-		InfoModal("#scuffed-install", "Hold On!", "You have a broken Discord Install.\n"+
-			"Sometimes Discord decides to install to the wrong location for some reason!\n"+
-			"You need to fix this before patching, otherwise Distra will likely not work.\n\n"+
-			"Use the below button to jump there and delete any folder called Discord or Squirrel.\n"+
-			"If the folder is now empty, feel free to go back a step and delete that folder too.\n"+
-			"Then see if Discord still starts. If not, reinstall it"),
-		RawInfoModal("#openasar-confirm", "OpenAsar", "OpenAsar is an open-source alternative of Discord desktop's app.asar.\n"+
-			"Distra is in no way affiliated with OpenAsar.\n"+
-			"You're installing OpenAsar at your own risk. If you run into issues with OpenAsar,\n"+
-			"no support will be provided, join the OpenAsar Server instead!\n\n"+
-			"To install OpenAsar, press Accept and click 'Install OpenAsar' again.", "", true),
-		InfoModal("#insufficient-permissions", "Insufficient Permissions", "Permission denied. Please grant the installer permissions in the settings."),
-		InfoModal("#openasar-patched", "Successfully Installed OpenAsar", "If Discord is still open, fully close it first. Then start it again and verify OpenAsar installed successfully!"),
-		InfoModal("#openasar-unpatched", "Successfully Uninstalled OpenAsar", "If Discord is still open, fully close it first. Then start it again and it should be back to stock!"),
-		InfoModal("#invalid-custom-location", "Invalid Location", "The specified location is not a valid Discord install.\nMake sure you select the base folder.\n\nHint: Discord snap is not supported. use flatpak or .deb"),
-		InfoModalExtra("#modal"+strconv.Itoa(modalId), modalTitle, modalMessage, modalExtra),
-
-		UpdateModal(),
-	}
-
-	return layout
-}
-
-func renderErrorCard(bgColor color.Color, textColor color.Color, message string, height float32) g.Widget {
-	return g.Style().
-		SetColor(g.StyleColorChildBg, bgColor).
-		SetStyleFloat(g.StyleVarAlpha, 0.9).
-		SetStyle(g.StyleVarWindowPadding, 10, 10).
-		SetStyleFloat(g.StyleVarChildRounding, 5).
-		To(
-			g.Child().
-				Size(g.Auto, height).
-				Layout(
-					g.Row(
-						g.Style().SetColor(g.StyleColorText, textColor).To(
-							g.Markdown(&message),
-						),
-					),
-				),
-		)
+// advance moves the layout cursor below a block drawn at x, y, after any widgets inside it moved it.
+func advance(x, y, w, h float32) {
+	imgui.SetCursorScreenPos(v2(x, y))
+	imgui.Dummy(v2(w, h))
 }
 
 func loop() {
-	g.PushWindowPadding(48, 48)
+	g.PushWindowPadding(0, 0)
+	g.PushItemSpacing(0, 0)
+	g.PushColorWindowBg(colBackground)
+	defer g.PopStyleV(2)
+	defer g.PopStyleColor()
 
 	g.SingleWindow().
 		RegisterKeyboardShortcuts(
@@ -692,23 +392,536 @@ func loop() {
 			}},
 		).
 		Layout(
-			g.Align(g.AlignCenter).To(
-				g.Style().SetFontSize(40).To(
-					g.Label("Distra Installer"),
-				),
-			),
-			g.Dummy(0, 40),
-
-			&CondWidget{
-				GithubError != nil,
-				func() g.Widget {
-					return g.Style().SetFontSize(20).To(renderErrorCard(DiscordRed, color.White, "Failed to fetch Info from GitHub. If this issue persists, visit "+SupportUrl+" for help.", 40))
-				},
-				nil,
-			},
-
-			renderInstaller(),
+			g.Custom(func() {
+				s, since := currentScreen()
+				switch s {
+				case screenIdle:
+					renderIdle(since)
+				case screenWorking:
+					keepAnimating(100 * time.Millisecond)
+					renderWorking(since)
+				case screenDone:
+					renderDone(since)
+				}
+				drawAlpha = 1
+			}),
+			modals(),
+			g.Custom(flushPopups),
 		)
+}
 
-	g.PopStyle()
+// --- Idle screen ---
+
+func renderIdle(since time.Time) {
+	if CanUpdateSelf() && !showedUpdatePrompt {
+		showedUpdatePrompt = true
+		openPopup("#update-prompt")
+	}
+
+	winW, winH := g.GetAvailableRegion()
+	origin := imgui.CursorScreenPos()
+	x0, y0 := origin.X+padX, origin.Y+padTop
+	w := winW - 2*padX
+	bodyH := winH - padTop - padBottom - footerH - gap
+
+	// Everything above the footer scrolls if the window is too short for it.
+	imgui.SetCursorScreenPos(v2(x0, y0))
+	g.PushStyleColor(g.StyleColorChildBg, withAlpha(colBackground, 0))
+	g.PushStyleColor(g.StyleColorScrollbarBg, colBackground)
+	g.PushStyleColor(g.StyleColorScrollbarGrab, colDeep)
+	imgui.PushStyleVarFloat(imgui.StyleVarScrollbarSize, 8)
+	if imgui.BeginChildV("idle-body", v2(w+10, bodyH), false, 0) {
+		renderIdleBody(since, w)
+	}
+	imgui.EndChild()
+	imgui.PopStyleVar()
+	g.PopStyleColorV(3)
+
+	renderFooter(since, x0, origin.Y+winH-padBottom-footerH, w)
+}
+
+func renderIdleBody(since time.Time, w float32) {
+	// Download location
+	{
+		p := imgui.CursorScreenPos()
+		dy := rise(since, .11)
+		x, y := p.X, p.Y+dy
+		h := float32(76)
+		fillRect(x, y, w, h, 8, colSurface)
+		iconFolder(x+14, y+(h-20)/2, colMuted)
+
+		btnW := buttonWidth("Open folder", iconExternal, 13) - 12
+		tx, tw := x+46, w-46-btnW-28
+		drawText(faceBold, 11, tx, y+12, colMuted, "DOWNLOAD LOCATION")
+		drawText(faceMono, 12.5, tx, y+30, colText, ellipsize(faceMono, 12.5, EquicordDirectory, tw))
+		hint := []span{
+			{faceRegular, colMuted, "Set the"},
+			{faceMono, colText, " EQUICORD_USER_DATA_DIR"},
+			{faceRegular, colMuted, " environment variable to change this, then restart the installer."},
+		}
+		richText(hint, 12, tx, y+48, tw, 16, true)
+
+		if button("open-folder", "Open folder", btnGhost, x+w-14-btnW, y+(h-32)/2, btnW, 32, true, iconExternal) {
+			dir := path.Dir(EquicordDirectory)
+			_ = os.MkdirAll(dir, 0o755)
+			g.OpenURL("file://" + dir)
+		}
+		advance(p.X, p.Y, w, h)
+		imgui.Dummy(v2(w, gap))
+	}
+
+	// Warnings
+	if GithubError != nil && !IsDevInstall {
+		notice(since, .18, w, colRed, []span{
+			{faceSemiBold, colRedText, "Couldn't reach GitHub."},
+			{faceRegular, colText, " Installing and repairing need Distra's latest release, so they're unavailable. Uninstalling still works. If this keeps happening, visit " + SupportUrl + "."},
+		})
+	}
+	notice(since, .18, w, colWarn, []span{
+		{faceSemiBold, colWarnText, "GitHub is the only official place to get Distra."},
+		{faceRegular, colText, " Any other site or repository not hosted by mmeta or claiming to be us is malicious. If you downloaded from somewhere else, uninstall it immediately, run a malware scan, and change your Discord password."},
+	})
+
+	// Install list
+	{
+		p := imgui.CursorScreenPos()
+		dy := rise(since, .25)
+		drawText(faceBold, 12, p.X, p.Y+dy, colLabel, "SELECT AN INSTALL TO PATCH")
+		advance(p.X, p.Y, w, 23)
+
+		if len(discords) == 0 {
+			msg := "No Discord installs found. Install Discord first, or point the installer at a custom location below."
+			if runtime.GOOS == "linux" {
+				msg += " Snap installs aren't supported."
+			}
+			q := imgui.CursorScreenPos()
+			lines := wrapText(faceRegular, 13, msg, w)
+			for i, line := range lines {
+				drawText(faceRegular, 13, q.X, q.Y+dy+float32(i)*19, colMuted, line)
+			}
+			advance(q.X, q.Y, w, float32(len(lines))*19+8)
+		}
+
+		for i, d := range discords {
+			di := d.(*DiscordInstall)
+			name := strings.TrimPrefix(installName(di), "Discord ")
+			installCard(since, i, name, di.path, di.isPatched, w, dy)
+		}
+		installCard(since, customChoiceIdx, "Custom install location", "Point the installer at any Discord folder", false, w, dy)
+
+		if radioIdx == customChoiceIdx {
+			customLocationField(since, w)
+		}
+	}
+
+	// Leave room under the last card so a lifted, hovered card isn't clipped.
+	imgui.Dummy(v2(w, 4))
+	drawAlpha = 1
+}
+
+// notice draws a tinted callout with a warning icon, like the mockup's GitHub warning.
+func notice(since time.Time, delay, w float32, tint color.RGBA, text []span) {
+	p := imgui.CursorScreenPos()
+	dy := rise(since, delay)
+	x, y := p.X, p.Y+dy
+	textW := w - 14 - 18 - 10 - 14
+	h := richText(text, 13, 0, 0, textW, 19, false) + 22
+	fillRect(x, y, w, h, 8, mix(colBackground, tint, .08))
+	strokeRect(x, y, w, h, 8, withAlpha(tint, .35), 1)
+	iconWarning(x+14, y+12, tint)
+	richText(text, 13, x+14+18+10, y+11, textW, 19, true)
+	advance(p.X, p.Y, w, h)
+	imgui.Dummy(v2(w, gap))
+}
+
+func installCard(since time.Time, idx int, name, subtitle string, patched bool, w, dy float32) {
+	p := imgui.CursorScreenPos()
+	h := float32(58)
+	selected := radioIdx == idx
+
+	imgui.SetCursorScreenPos(p)
+	if imgui.InvisibleButton("card-"+strconv.Itoa(idx), v2(w, h)) {
+		radioIdx = idx
+		keepAnimating(600 * time.Millisecond)
+	}
+	hovered := imgui.IsItemHovered()
+	if hovered {
+		imgui.SetMouseCursor(imgui.MouseCursorHand)
+	}
+
+	x, y := p.X, p.Y+dy-Ternary[float32](hovered, 1, 0)
+	fillRect(x, y, w, h, 8, Ternary(hovered, colSurfaceHov, colSurface))
+	if selected {
+		strokeRect(x, y, w, h, 8, colAccent, 1)
+	}
+
+	// Radio
+	cx, cy := x+14+10, y+h/2
+	dl := drawList()
+	dl.AddCircle(v2(cx, cy), 9, vec4(Ternary(selected, colAccent, colFaint)), 32, 2)
+	if selected {
+		dl.AddCircleFilled(v2(cx, cy), 5*pop(selectedAt(idx), 0), vec4(colAccent))
+	}
+
+	tx := x + 14 + 20 + 12
+	drawText(faceSemiBold, 14, tx, y+11, colHeading, name)
+	if patched {
+		nw, _ := textSize(faceSemiBold, 14, name)
+		bx := tx + nw + 8
+		bw, _ := textSize(faceBold, 10, "PATCHED")
+		fillRect(bx, y+12, bw+12, 16, 4, mix(colSurface, colGreen, .15))
+		drawText(faceBold, 10, bx+6, y+13.5, colGreenText, "PATCHED")
+	}
+	drawText(faceMono, 12, tx, y+32, colMuted, ellipsize(faceMono, 12, subtitle, w-(tx-x)-14))
+
+	advance(p.X, p.Y, w, h+8)
+}
+
+var (
+	lastSelected   = -1
+	lastSelectedAt time.Time
+)
+
+// selectedAt returns when idx became the selected install, for the radio dot's pop.
+func selectedAt(idx int) time.Time {
+	if lastSelected != idx {
+		lastSelected, lastSelectedAt = idx, time.Now()
+	}
+	return lastSelectedAt
+}
+
+func customLocationField(since time.Time, w float32) {
+	p := imgui.CursorScreenPos()
+	x, y := p.X+32, p.Y
+	fieldW := w - 32
+	drawText(faceSemiBold, 12, x, y+2, colLabel, "Custom install location")
+
+	candidates := makeAutoComplete()
+	imgui.SetCursorScreenPos(v2(x, y+22))
+	withFont(faceMono, 13, func() {
+		g.PushStyleColor(g.StyleColorFrameBg, colDeep)
+		g.PushStyleColor(g.StyleColorFrameBgHovered, colDeep)
+		g.PushStyleColor(g.StyleColorFrameBgActive, colDeep)
+		g.PushStyleColor(g.StyleColorBorder, Ternary(customFocused, colFocus, colDeep))
+		g.PushStyleColor(g.StyleColorText, colText)
+		g.PushStyleColor(g.StyleColorTextDisabled, colFaint)
+		imgui.PushStyleVarFloat(imgui.StyleVarFrameRounding, 6)
+		imgui.PushStyleVarFloat(imgui.StyleVarFrameBorderSize, 1)
+		imgui.PushStyleVarVec2(imgui.StyleVarFramePadding, v2(12, 12))
+		g.InputText(&customDir).
+			Label("##custom-location").
+			Hint(Ternary(runtime.GOOS == "windows", `C:\Path\To\Discord`, "/path/to/discord")).
+			Size(fieldW).
+			Flags(g.InputTextFlagsCallbackCompletion).
+			OnChange(onCustomInputChanged).
+			Callback(autoCompleteCallback(candidates)).
+			Build()
+		customFocused = imgui.IsItemActive()
+		imgui.PopStyleVarV(3)
+		g.PopStyleColorV(6)
+	})
+
+	h := float32(22 + 40 + 6)
+	if customFocused && len(candidates) > 0 {
+		shown := candidates[:min(len(candidates), 6)]
+		line := "Tab completes: " + strings.Join(shown, "  ")
+		drawText(faceMono, 12, x, y+h, colFaint, ellipsize(faceMono, 12, line, fieldW))
+		h += 18
+	}
+	advance(p.X, p.Y, w, h+8)
+}
+
+// --- Footer ---
+
+func renderFooter(since time.Time, x, y, w float32) {
+	dy := rise(since, .32)
+	y += dy
+	drawList().AddLine(v2(x, y), v2(x+w, y), vec4(colBorder), 1)
+	y += 17
+
+	noTarget := radioIdx == customChoiceIdx && strings.TrimSpace(customDir) == ""
+	canDownload := !noTarget && (GithubError == nil || IsDevInstall)
+
+	isOpenAsar := false
+	if radioIdx != customChoiceIdx && len(discords) > radioIdx {
+		isOpenAsar = discords[radioIdx].(*DiscordInstall).IsOpenAsar()
+	}
+	openAsarLabel := Ternary(isOpenAsar, "Uninstall OpenAsar", "Install OpenAsar")
+
+	bx := x
+	place := func(label string, ic icon) (float32, float32) {
+		bw := buttonWidth(label, ic, 14)
+		left := bx
+		bx += bw + 10
+		return left, bw
+	}
+
+	if l, bw := place("Install", iconDownload); button("install", "Install", btnPrimary, l, y, bw, 38, canDownload, iconDownload) {
+		run(opInstall)
+	}
+	if l, bw := place("Reinstall / Repair", nil); button("repair", "Reinstall / Repair", btnSecondary, l, y, bw, 38, canDownload, nil) {
+		run(opRepair)
+	}
+	if l, bw := place(openAsarLabel, nil); button("openasar", openAsarLabel, btnGhost, l, y, bw, 38, !noTarget, nil) {
+		handleOpenAsar()
+	}
+	uw := buttonWidth("Uninstall", nil, 14)
+	if button("uninstall", "Uninstall", btnDanger, x+w-uw, y, uw, 38, !noTarget, nil) {
+		run(opUninstall)
+	}
+	drawAlpha = 1
+}
+
+// --- Working screen ---
+
+func renderWorking(since time.Time) {
+	op := currentOp
+	winW, winH := g.GetAvailableRegion()
+	origin := imgui.CursorScreenPos()
+	w := winW - 2*padX - 120
+	x := origin.X + padX + 60
+
+	step, doneAt := op.snapshot()
+	stepsH := 24 + float32(len(op.steps))*26 + float32(len(op.steps)-1)*6
+	total := float32(44+16+22+8+16) + 28 + 31 + 28 + stepsH
+	y := origin.Y + padTop + (winH-padTop-padBottom-total)/2
+
+	working, _, _ := op.titles()
+
+	// Spinner, title and subtitle
+	dy := rise(since, .04)
+	cx, cy := x+w/2, y+dy+22
+	t := float32(time.Since(since).Seconds())
+	arc(cx, cy, 18, 0, 2*math.Pi, colBorder, 4)
+	arc(cx, cy, 18, t*2*math.Pi-math.Pi/2, t*2*math.Pi, colAccent, 4)
+	drawCentered(faceBold, 18, cx, y+dy+44+16, colHeading, working)
+	drawCentered(faceRegular, 13, cx, y+dy+44+16+22+8, colMuted, "Working on "+op.name+". Keep Discord closed until this finishes.")
+	y += 44 + 16 + 22 + 8 + 16 + 28
+
+	// Progress bar
+	dy = rise(since, .11)
+	op.shownProgress += (op.progress() - op.shownProgress) * .12
+	pct := int(math.Round(float64(op.shownProgress * 100)))
+	label := op.steps[min(step, len(op.steps)-1)]
+	drawText(faceSemiBold, 12, x, y+dy, colLabel, label)
+	pctText := strconv.Itoa(pct) + "%"
+	pw, _ := textSize(faceSemiBold, 12, pctText)
+	drawText(faceSemiBold, 12, x+w-pw, y+dy, colLabel, pctText)
+	by := y + dy + 23
+	fillRect(x, by, w, 8, 4, colDeep)
+	fillW := w * op.shownProgress
+	if fillW > 1 {
+		fillRect(x, by, fillW, 8, 4, colAccent)
+		sheen(x, by, fillW, 8, since)
+	}
+	y += 31 + 28
+
+	// Steps
+	dy = rise(since, .18)
+	fillRect(x, y+dy, w, stepsH, 8, colSurface)
+	ry := y + dy + 12
+	for i, s := range op.steps {
+		ix, iy := x+14+8, ry+13
+		switch {
+		case i < step:
+			iconCheckCircle(ix, iy, 8*pop(doneAt[i], 0), colGreen, 1, 1.8)
+			drawText(faceRegular, 13, x+14+16+10, ry+5, colText, s)
+		case i == step:
+			pulse := .65 + .35*float32(math.Cos(time.Since(since).Seconds()*2*math.Pi/1.2))
+			drawAlpha *= pulse
+			drawList().AddCircle(v2(ix, iy), 7, vec4(colAccent), 24, 2)
+			drawList().AddCircleFilled(v2(ix, iy), 3, vec4(colAccent))
+			drawAlpha /= pulse
+			drawText(faceRegular, 13, x+14+16+10, ry+5, colHeading, s)
+		default:
+			drawList().AddCircle(v2(ix, iy), 7, vec4(colSecondary), 24, 2)
+			drawText(faceRegular, 13, x+14+16+10, ry+5, colFaint, s)
+		}
+		ry += 26 + 6
+	}
+}
+
+// sheen sweeps a soft highlight across the progress bar fill.
+func sheen(x, y, w, h float32, since time.Time) {
+	period := 1.8
+	t := float32(math.Mod(time.Since(since).Seconds(), period) / period)
+	bandW := w * .35
+	bx := x + (-1.2+t*4.4)*bandW
+	imgui.PushClipRect(v2(x, y), v2(x+w, y+h), true)
+	const slices = 12
+	for i := 0; i < slices; i++ {
+		f := (float32(i) + .5) / slices
+		a := .22 * (1 - float32(math.Abs(float64(f*2-1))))
+		sx := bx + bandW*float32(i)/slices
+		fillRect(sx, y, bandW/slices+.5, h, 0, withAlpha(hex(0xffffff), a))
+	}
+	imgui.PopClipRect()
+}
+
+func drawCentered(face fontFace, size, cx, y float32, c color.RGBA, text string) {
+	tw, _ := textSize(face, size, text)
+	drawText(face, size, cx-tw/2, y, c, text)
+}
+
+// --- Done screen ---
+
+func renderDone(since time.Time) {
+	op := currentOp
+	winW, winH := g.GetAvailableRegion()
+	origin := imgui.CursorScreenPos()
+	cx := origin.X + winW/2
+
+	_, title, subtitle := op.titles()
+	lines := wrapText(faceRegular, 13, subtitle, 420)
+	subH := float32(len(lines)) * 19.5
+	total := 72 + 24 + 27 + 8 + subH + 24 + 38
+	y := origin.Y + padTop + (winH-padTop-padBottom-total)/2
+
+	// Icon: pops in, then the check draws itself.
+	scale := pop(since, 0)
+	elapsed := float32(time.Since(since).Seconds())
+	drawAlpha = clamp01(elapsed / .35)
+	drawList().AddCircleFilled(v2(cx, y+36), 34*scale, vec4(mix(colBackground, colGreen, .14)))
+	iconCheckCircle(cx, y+36, 26*scale, colGreen, (elapsed-.3)/.45, 4)
+	y += 72 + 24
+
+	dy := rise(since, .11)
+	drawCentered(faceBold, 22, cx, y+dy, colHeading, title)
+	y += 27 + 8
+	for i, line := range lines {
+		drawCentered(faceRegular, 13, cx, y+dy+float32(i)*19.5, colMuted, line)
+	}
+	y += subH + 24
+
+	dy = rise(since, .18)
+	rw, bw := buttonWidth("Restart Discord", nil, 14), buttonWidth("Back", nil, 14)
+	bx := cx - (rw+10+bw)/2
+	if button("restart", "Restart Discord", btnPrimary, bx, y+dy, rw, 38, true, nil) {
+		di := op.target
+		go func() {
+			if err := restartDiscord(di); err != nil {
+				ShowModal("Couldn't restart Discord", "Start "+installName(di)+" yourself to finish.", err.Error())
+			}
+		}()
+	}
+	if button("back", "Back", btnSecondary, bx+rw+10, y+dy, bw, 38, true, nil) {
+		setScreen(screenIdle)
+	}
+	drawAlpha = 1
+}
+
+// --- Modals ---
+
+type modalButton struct {
+	label   string
+	kind    buttonKind
+	onClick func()
+}
+
+func closeButton(label string) modalButton {
+	return modalButton{label, btnSecondary, func() {}}
+}
+
+func modals() g.Widget {
+	return g.Custom(func() {
+		openAsarAccept := modalButton{"Install OpenAsar", btnPrimary, func() {
+			acceptedOpenAsar = true
+			if di := getChosenInstall(); di != nil {
+				startOperation(opOpenAsar, di)
+			}
+		}}
+
+		modal("#scuffed-install", "Hold on!", "You have a broken Discord install. Sometimes Discord installs to the wrong location. "+
+			"Fix this before patching, or Distra will likely not work.\n\n"+
+			"Use the button below to jump there and delete any folder called Discord or Squirrel. If the folder is then empty, "+
+			"delete it too. Then check that Discord still starts, and reinstall it if it doesn't.", "",
+			modalButton{"Take me there", btnPrimary, func() {
+				// this issue only exists on windows so using Windows specific path is oki
+				g.OpenURL("file://" + path.Join(os.Getenv("PROGRAMDATA"), os.Getenv("USERNAME")))
+			}}, closeButton("Close"))
+
+		modal("#openasar-confirm", "Install OpenAsar?", "OpenAsar is an open-source alternative to Discord desktop's app.asar. "+
+			"Distra is in no way affiliated with OpenAsar.\n\n"+
+			"You're installing it at your own risk. If you run into problems with OpenAsar, no support will be provided here; "+
+			"join the OpenAsar server instead.", "",
+			openAsarAccept, closeButton("Cancel"))
+
+		modal("#insufficient-permissions", "Insufficient permissions", "Permission denied. Please grant the installer permission in System Settings.", "",
+			modalButton{"Open Settings", btnPrimary, func() {
+				// "App Management" permissions doesnt exist on Monterey, just use full disk access for now
+				g.OpenURL("x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles")
+			}}, closeButton("Close"))
+
+		modal("#invalid-custom-location", "Invalid location", "That folder isn't a valid Discord install. Make sure you select its base folder.\n\n"+
+			"Discord from Snap isn't supported; use the Flatpak or .deb instead.", "", closeButton("OK"))
+
+		modal("#modal"+strconv.Itoa(modalId), modalTitle, modalMessage, modalExtra, closeButton("OK"))
+
+		modal("#update-prompt", "An installer update is available", "Distra Installer will download the new version, which can take a moment, "+
+			"then reopen itself.\n\nOn macOS, updating opens the download in your browser instead.", "",
+			modalButton{"Update now", btnPrimary, func() {
+				if runtime.GOOS == "darwin" {
+					g.OpenURL(GetInstallerDownloadLink())
+					return
+				}
+				if err := UpdateSelf(); err != nil {
+					ShowModal("Failed to update the installer", "Please download the latest Distra Installer manually.", err.Error())
+				} else if err = RelaunchSelf(); err != nil {
+					ShowModal("Failed to restart the installer", "Please reopen Distra Installer manually.", err.Error())
+				}
+			}}, closeButton("Later"))
+	})
+}
+
+// modal draws a themed popup. Buttons close it after running their action.
+func modal(id, title, body, extra string, buttons ...modalButton) {
+	const w = float32(460)
+	g.PushStyleColor(g.StyleColorPopupBg, colBackground)
+	g.PushStyleColor(g.StyleColorBorder, colBorder)
+	g.PushStyleColor(g.StyleColorModalWindowDimBg, withAlpha(hex(0), .6))
+	imgui.PushStyleVarFloat(imgui.StyleVarWindowRounding, 10)
+	imgui.PushStyleVarVec2(imgui.StyleVarWindowPadding, v2(24, 22))
+	defer func() {
+		imgui.PopStyleVarV(2)
+		g.PopStyleColorV(3)
+	}()
+
+	if !imgui.BeginPopupModalV(id, nil, imgui.WindowFlagsNoTitleBar|imgui.WindowFlagsAlwaysAutoResize|imgui.WindowFlagsNoMove) {
+		return
+	}
+	defer imgui.EndPopup()
+
+	p := imgui.CursorScreenPos()
+	x, y := p.X, p.Y
+	drawText(faceBold, 18, x, y, colHeading, title)
+	y += 22 + 10
+	for _, line := range wrapText(faceRegular, 13, body, w) {
+		drawText(faceRegular, 13, x, y, colText, line)
+		y += 19
+	}
+	if extra != "" {
+		lines := wrapText(faceMono, 12, extra, w-24)
+		lines = lines[:min(len(lines), 12)]
+		h := float32(len(lines))*17 + 20
+		y += 10
+		fillRect(x, y, w, h, 6, colDeep)
+		for i, line := range lines {
+			drawText(faceMono, 12, x+12, y+10+float32(i)*17, colMuted, line)
+		}
+		y += h
+	}
+	y += 20
+
+	bx := x + w
+	for i := len(buttons) - 1; i >= 0; i-- {
+		b := buttons[i]
+		bw := buttonWidth(b.label, nil, 14)
+		bx -= bw
+		if button(id+"-btn-"+strconv.Itoa(i), b.label, b.kind, bx, y, bw, 38, true, nil) {
+			imgui.CloseCurrentPopup()
+			b.onClick()
+		}
+		bx -= 10
+	}
+	advance(x, p.Y, w, y+38-p.Y)
 }
