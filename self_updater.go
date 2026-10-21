@@ -7,6 +7,7 @@
 package main
 
 import (
+	"equilotl/buildinfo"
 	"errors"
 	"fmt"
 	"io"
@@ -15,7 +16,6 @@ import (
 	"path"
 	"runtime"
 	"time"
-	"vencord/buildinfo"
 )
 
 var IsSelfOutdated = false
@@ -49,11 +49,24 @@ func GetInstallerDownloadLink() string {
 	const BaseUrl = "https://github.com/Equicord/Equilotl/releases/latest/download/"
 	switch runtime.GOOS {
 	case "windows":
-		filename := Ternary(buildinfo.UiType == buildinfo.UiTypeCli, "EquilotlCli.exe", "Equilotl.exe")
-		return BaseUrl + filename
+		filename := Ternary(buildinfo.UiType == buildinfo.UiTypeCli, "EquilotlCli", "Equilotl")
+		if runtime.GOARCH == "arm64" {
+			filename += "-arm64"
+		}
+		return BaseUrl + filename + ".exe"
 	case "darwin":
-		return BaseUrl + "Equilotl.MacOS.zip"
+		switch runtime.GOARCH {
+		case "amd64":
+			return BaseUrl + "Equilotl-x64.dmg"
+		case "arm64":
+			return BaseUrl + "Equilotl-arm64.dmg"
+		default:
+			return ""
+		}
 	case "linux":
+		if runtime.GOARCH == "arm64" {
+			return BaseUrl + "EquilotlCli-linux-arm64"
+		}
 		return BaseUrl + "EquilotlCli-linux"
 	default:
 		return ""

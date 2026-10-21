@@ -11,21 +11,22 @@ env:
 
 permissions:
   contents: write
+  actions: read # SignPath fetches the unsigned artifact through the workflow token
 
 jobs:
   build-linux:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest # Go without CGO seems to not depend on glibc, so building on latest should be fine
 
     steps:
-      - name: Install Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/cache@v3
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cache/go-build
@@ -37,117 +38,296 @@ jobs:
       - name: Install Linux dependencies
         run: |
           sudo apt update
-          sudo apt install -y pkg-config libsdl2-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libglx-dev libgl1-mesa-dev libxxf86vm-dev libwayland-dev libxkbcommon-dev wayland-protocols extra-cmake-modules
+          sudo apt install -y pkg-config libsdl2-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libglx-dev libgl1-mesa-dev libxxf86vm-dev libglfw3-dev libwayland-dev libwayland-egl1 libegl-dev libxkbcommon-dev wayland-protocols extra-cmake-modules
 
       - name: Install Go dependencies
         run: go get -v
 
-      - name: Build GUI
-        run: CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -v -tags "static gui" -ldflags "-s -w -X 'vencord/buildinfo.InstallerGitHash=$(git rev-parse --short HEAD)' -X 'vencord/buildinfo.InstallerTag=${{ github.ref_name }}'" -o Equilotl-x11
+      - name: Recreate vendor and apply Wayland patches
+        run: |
+          go mod vendor
+          git apply patches/wayland.patch
+
+      - name: Build GUI (X11)
+        run:
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -v -tags static -ldflags "-s
+          -w -X 'equilotl/buildinfo.InstallerGitHash=$(git rev-parse --short
+          HEAD)' -X 'equilotl/buildinfo.InstallerTag=${{ github.ref_name }}'" -o
+          Equilotl-x11
+
+      - name: Build GUI (Wayland)
+        run:
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -v -tags "static wayland"
+          -ldflags "-s -w -X 'equilotl/buildinfo.InstallerGitHash=$(git
+          rev-parse --short HEAD)' -X 'equilotl/buildinfo.InstallerTag=${{
+          github.ref_name }}'" -o Equilotl-wayland
+
+      - name: Build GUI (Combined)
+        run:
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -v -tags "static combined"
+          -ldflags "-s -w -X 'equilotl/buildinfo.InstallerGitHash=$(git
+          rev-parse --short HEAD)' -X 'equilotl/buildinfo.InstallerTag=${{
+          github.ref_name }}'" -o Equilotl
 
       - name: Build CLI
-        run: CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -v -tags "cli" -ldflags "-s -w -X 'vencord/buildinfo.InstallerGitHash=$(git rev-parse --short HEAD)' -X 'vencord/buildinfo.InstallerTag=${{ github.ref_name }}'" -o EquilotlCli-linux
+        run:
+          CGO_ENABLED=1 GOOS=linux GOARCH=amd64 go build -v -tags "cli" -ldflags "-s
+          -w -X 'equilotl/buildinfo.InstallerGitHash=$(git rev-parse --short
+          HEAD)' -X 'equilotl/buildinfo.InstallerTag=${{ github.ref_name }}'" -o
+          EquilotlCli-linux
 
       - name: Update executable
         run: |
           chmod +x Equilotl*
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: Equilotl-linux
           path: |
             Equilotl-x11
+            Equilotl-wayland
+            Equilotl
             EquilotlCli-linux
 
-      - name: Notify webhook (success)
-        if: success()
-        run: |
-          curl -H "Content-Type: application/json" -X POST -d '{"content":"✅ **Linux build succeeded** for `${{ github.ref_name }}`\nCommit: `${{ github.sha }}`\nWorkflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' ${{ secrets.DISCORD_WEBHOOK }}
-
-      - name: Notify webhook (failure)
-        if: failure()
-        run: |
-          curl -H "Content-Type: application/json" -X POST -d '{"content":"❌ **Linux build failed** for `${{ github.ref_name }}`\n<@297075664530440192>\nCommit: `${{ github.sha }}`\nWorkflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' ${{ secrets.DISCORD_WEBHOOK }}
-
-  build-mac:
-    runs-on: macos-latest
+  build-linux-arm64:
+    runs-on: ubuntu-24.04-arm # Native ARM64 runner, the GUI needs ARM64 X11/Wayland/GL libraries
 
     steps:
-      - name: Install Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-
-      - id: go-cache-paths
-        run: |
-          echo "go_build=$(go env GOCACHE)" >> $GITHUB_ENV
-          echo "go_mod=$(go env GOMODCACHE)" >> $GITHUB_ENV
-
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/cache@v3
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
-            ~/Library/Caches/go-build
+            ~/.cache/go-build
             ~/go/pkg/mod
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          key: ${{ runner.os }}-arm64-go-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-
+            ${{ runner.os }}-arm64-go-
 
-      - name: Install dependencies
-        run: brew install pkg-config sdl2
+      - name: Install Linux dependencies
+        run: |
+          sudo apt update
+          sudo apt install -y pkg-config libsdl2-dev libx11-dev libxcursor-dev libxrandr-dev libxinerama-dev libxi-dev libglx-dev libgl1-mesa-dev libxxf86vm-dev libglfw3-dev libwayland-dev libwayland-egl1 libegl-dev libxkbcommon-dev wayland-protocols extra-cmake-modules
 
       - name: Install Go dependencies
         run: go get -v
 
-      - name: Build GUI
-        run: CGO_CFLAGS="-mmacosx-version-min=10.15" CGO_LDFLAGS="-mmacosx-version-min=10.15" CGO_ENABLED=1 GOOS=darwin GOARCH=amd64 go build -v -tags "static gui" -ldflags "-s -w -X 'vencord/buildinfo.InstallerGitHash=$(git rev-parse --short HEAD)' -X 'vencord/buildinfo.InstallerTag=${{ github.ref_name }}'" -o Equilotl
+      - name: Recreate vendor and apply Wayland patches
+        run: |
+          go mod vendor
+          git apply patches/wayland.patch
+
+      - name: Build GUI (X11)
+        run: CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -v -tags static -ldflags "-s -w -X 'equilotl/buildinfo.InstallerGitHash=$(git rev-parse --short HEAD)' -X 'equilotl/buildinfo.InstallerTag=${{ github.ref_name }}'" -o Equilotl-x11-arm64
+
+      - name: Build GUI (Wayland)
+        run: CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -v -tags "static wayland" -ldflags "-s -w -X 'equilotl/buildinfo.InstallerGitHash=$(git rev-parse --short HEAD)' -X 'equilotl/buildinfo.InstallerTag=${{ github.ref_name }}'" -o Equilotl-wayland-arm64
+
+      - name: Build GUI (Combined)
+        run: CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -v -tags "static combined" -ldflags "-s -w -X 'equilotl/buildinfo.InstallerGitHash=$(git rev-parse --short HEAD)' -X 'equilotl/buildinfo.InstallerTag=${{ github.ref_name }}'" -o Equilotl-arm64
+
+      - name: Build CLI
+        run: CGO_ENABLED=1 GOOS=linux GOARCH=arm64 go build -v -tags "cli" -ldflags "-s -w -X 'equilotl/buildinfo.InstallerGitHash=$(git rev-parse --short HEAD)' -X 'equilotl/buildinfo.InstallerTag=${{ github.ref_name }}'" -o EquilotlCli-linux-arm64
 
       - name: Update executable
         run: |
           chmod +x Equilotl*
 
-      - name: Generate MacOS GUI bundle
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Equilotl-linux-arm64
+          path: |
+            Equilotl-x11-arm64
+            Equilotl-wayland-arm64
+            Equilotl-arm64
+            EquilotlCli-linux-arm64
+
+  build-mac:
+    runs-on: ${{ matrix.runner }}
+
+    strategy:
+      matrix:
+        include:
+          - arch: amd64
+            runner: macos-15-intel
+            artifact_name: Equilotl-macos
+            dmg_name: Equilotl-x64.dmg
+          - arch: arm64
+            runner: macos-latest
+            artifact_name: Equilotl-macos-arm64
+            dmg_name: Equilotl-arm64.dmg
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.2"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/Library/Caches/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-${{ matrix.arch }}-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-${{ matrix.arch }}-go-
+
+      - name: Install dependencies
+        run: brew install sdl2 create-dmg
+
+      - name: Install Go dependencies
+        run: go get -v
+
+      - name: Import signing certificate
+        env:
+          CSC_LINK: ${{ secrets.APPLE_SIGNING_CERT }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_SIGNING_CERT_PASSWORD }}
         run: |
-          mkdir -p Equilotl.app/Contents/MacOS
-          mkdir -p Equilotl.app/Contents/Resources
-          cp macos/Info.plist Equilotl.app/Contents/Info.plist
-          mv Equilotl Equilotl.app/Contents/MacOS/Equilotl
-          cp macos/icon.icns Equilotl.app/Contents/Resources/icon.icns
-          zip -r Equilotl.MacOS.zip Equilotl.app
+          echo "$CSC_LINK" | base64 --decode > certificate.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import certificate.p12 -k build.keychain -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build.keychain
+          rm certificate.p12
+
+      - name: Build DMG
+        run: |
+          make ARCH=${{ matrix.arch }} GUI=1 DMG=1 IDENTITY="Developer ID Application" VERSION=${{ github.ref_name }}
+          mv build/Equilotl.dmg ${{ matrix.dmg_name }}
+
+      - name: Notarize the DMG
+        env:
+          API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          echo "$API_KEY" > apple.p8
+          xcrun notarytool submit ${{ matrix.dmg_name }} --key apple.p8 --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
+          xcrun stapler staple ${{ matrix.dmg_name }}
+          rm apple.p8
 
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: Equilotl-macos
+          name: ${{ matrix.artifact_name }}
+          path: ${{ matrix.dmg_name }}
+
+  build-mac-dmg:
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.2"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
           path: |
-            Equilotl.MacOS.zip
+            ~/Library/Caches/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-universal-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-universal-go-
 
-      - name: Notify webhook (success)
-        if: success()
-        run: |
-          curl -H "Content-Type: application/json" -X POST -d '{"content":"✅ **macOS build succeeded** for `${{ github.ref_name }}`\nCommit: `${{ github.sha }}`\nWorkflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' ${{ secrets.DISCORD_WEBHOOK }}
+      - name: Install dependencies
+        run: brew install sdl2 create-dmg
 
-      - name: Notify webhook (failure)
-        if: failure()
+      - name: Install Go dependencies
+        run: go get -v
+
+      - name: Import signing certificate
+        env:
+          CSC_LINK: ${{ secrets.APPLE_SIGNING_CERT }}
+          CSC_KEY_PASSWORD: ${{ secrets.APPLE_SIGNING_CERT_PASSWORD }}
         run: |
-          curl -H "Content-Type: application/json" -X POST -d '{"content":"❌ **macOS build failed** for `${{ github.ref_name }}`\n<@297075664530440192>\nCommit: `${{ github.sha }}`\nWorkflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' ${{ secrets.DISCORD_WEBHOOK }}
+          echo "$CSC_LINK" | base64 --decode > certificate.p12
+          security create-keychain -p "" build.keychain
+          security default-keychain -s build.keychain
+          security unlock-keychain -p "" build.keychain
+          security import certificate.p12 -k build.keychain -P "$CSC_KEY_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "" build.keychain
+          rm certificate.p12
+
+      - name: Build universal DMG
+        run: make ARCH=universal GUI=1 DMG=1 IDENTITY="Developer ID Application" VERSION=${{ github.ref_name }}
+
+      - name: Notarize the DMG
+        env:
+          API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          echo "$API_KEY" > apple.p8
+          xcrun notarytool submit build/Equilotl.dmg --key apple.p8 --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
+          xcrun stapler staple build/Equilotl.dmg
+          rm apple.p8
+
+      - name: Build CLI
+        run: |
+          make ARCH=amd64 GUI=0 VERSION=${{ github.ref_name }}
+          mv build/EquilotlCli-darwin build/EquilotlCli-x64
+          make ARCH=arm64 GUI=0 VERSION=${{ github.ref_name }}
+          mv build/EquilotlCli-darwin build/EquilotlCli-arm64
+          make ARCH=universal GUI=0 VERSION=${{ github.ref_name }}
+          mv build/EquilotlCli-darwin build/EquilotlCli-universal
+          for f in build/EquilotlCli-*; do
+            codesign --force --options runtime --sign "Developer ID Application" "$f"
+            lipo -info "$f"
+          done
+
+      - name: Notarize the CLI
+        env:
+          API_KEY: ${{ secrets.APPLE_API_KEY }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          echo "$API_KEY" > apple.p8
+          for f in build/EquilotlCli-*; do
+            ditto -c -k "$f" "$f.zip"
+            xcrun notarytool submit "$f.zip" --key apple.p8 --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER" --wait
+            rm "$f.zip"
+          done
+          rm apple.p8
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Equilotl-macos-universal
+          path: |
+            build/Equilotl.dmg
+            build/EquilotlCli-x64
+            build/EquilotlCli-arm64
+            build/EquilotlCli-universal
 
   build-windows:
     runs-on: windows-latest
 
     steps:
-      - name: Install Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: "1.24"
-
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
-      - uses: actions/cache@v3
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.2"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~\AppData\Local\go-build
@@ -157,107 +337,231 @@ jobs:
             ${{ runner.os }}-go-
 
       - name: Setup MSYS2
-        uses: msys2/setup-msys2@v2
+        uses: msys2/setup-msys2@66cd2cce69caa17b53920067426061ca1de3a884 # v2.32.0
+        with:
+          path-type: inherit
 
       - name: Install Windows dependencies
         shell: msys2 {0}
         run: |
-          pacman -S --noconfirm git mingw-w64-x86_64-gcc mingw-w64-x86_64-SDL2 mingw-w64-x86_64-go
-          export GOROOT=/mingw64/lib/go
-          export GOPATH=/mingw64
+          pacman -S --noconfirm git mingw-w64-x86_64-gcc mingw-w64-x86_64-SDL2
 
       - name: Install Go dependencies
         shell: msys2 {0}
         run: |
-          export GOROOT=/mingw64/lib/go
-          export GOPATH=/mingw64
           go get -v
-          go install github.com/tc-hib/go-winres@latest
+          go install github.com/tc-hib/go-winres@d743268d7ea168077ddd443c4240562d4f5e8c3e  # v0.3.3
 
       - name: Build GUI
         shell: msys2 {0}
         run: |
-          export GOROOT=/mingw64/lib/go
-          export GOPATH=/mingw64
           go-winres make --product-version "git-tag"
-          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build -v -tags "static gui" -ldflags "-s -w -H=windowsgui -extldflags=-static -X 'vencord/buildinfo.InstallerGitHash=$(git rev-parse --short HEAD)' -X 'vencord/buildinfo.InstallerTag=${{ github.ref_name }}'" -o Equilotl.exe
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build -v -tags "static gui" -ldflags "-s -w -H=windowsgui -extldflags=-static -X 'equilotl/buildinfo.InstallerGitHash=$(git rev-parse --short HEAD)' -X 'equilotl/buildinfo.InstallerTag=${{ github.ref_name }}'" -o Equilotl.exe
 
       - name: Build CLI
         shell: msys2 {0}
         run: |
-          export GOROOT=/mingw64/lib/go
-          export GOPATH=/mingw64
-          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build -v -tags "cli" -ldflags "-s -w -X 'vencord/buildinfo.InstallerGitHash=$(git rev-parse --short HEAD)' -X 'vencord/buildinfo.InstallerTag=${{ github.ref_name }}'" -o EquilotlCli.exe
+          CGO_ENABLED=1 GOOS=windows GOARCH=amd64 go build -v -tags "cli" -ldflags "-s -w -X 'equilotl/buildinfo.InstallerGitHash=$(git rev-parse --short HEAD)' -X 'equilotl/buildinfo.InstallerTag=${{ github.ref_name }}'" -o EquilotlCli.exe
+          cp EquilotlCli.exe EquilotlCli-x64.exe # Explicit arch in the name, winget picks installers by it
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Upload unsigned artifact
+        id: upload-unsigned
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: Equilotl-windows
+          name: Equilotl-windows-unsigned
           path: |
             Equilotl.exe
             EquilotlCli.exe
+            EquilotlCli-x64.exe
 
-      - name: Notify webhook (success)
-        if: success()
-        shell: msys2 {0}
-        run: |
-          curl -H "Content-Type: application/json" -X POST -d '{"content":"✅ **Windows build succeeded** for `${{ github.ref_name }}`\nCommit: `${{ github.sha }}`\nWorkflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' ${{ secrets.DISCORD_WEBHOOK }}
+      - name: Submit SignPath signing request
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_KEY }}
+          organization-id: ${{ secrets.SIGNPATH_ORG_ID }}
+          project-slug: Equilotl
+          signing-policy-slug: test-signing
+          artifact-configuration-slug: x64
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: windows-signed/
 
-      - name: Notify webhook (failure)
-        if: failure()
-        shell: msys2 {0}
-        run: |
-          curl -H "Content-Type: application/json" -X POST -d '{"content":"❌ **Windows build failed** for `${{ github.ref_name }}`\n<@297075664530440192>\nCommit: `${{ github.sha }}`\nWorkflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' ${{ secrets.DISCORD_WEBHOOK }}
+      - name: Upload signed artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Equilotl-windows
+          path: |
+            windows-signed/Equilotl.exe
+            windows-signed/EquilotlCli.exe
+            windows-signed/EquilotlCli-x64.exe
 
-  release:
-    runs-on: ubuntu-latest
-    needs: [build-linux, build-mac, build-windows]
+  build-windows-arm64:
+    runs-on: windows-latest # No ARM64 runner needed, the ARM64 binaries are cross-compiled
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: "1.26.2"
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~\AppData\Local\go-build
+            ~\go\pkg\mod
+          key: ${{ runner.os }}-arm64-go-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-arm64-go-
+
+      # The GUI needs a C/C++ compiler targeting ARM64 Windows, llvm-mingw provides one
+      - name: Install llvm-mingw
+        shell: pwsh
+        run: |
+          $version = "20260908"
+          $sha256 = "1bcf74d06b724aeecaa6412ca85f5b26fb1da770e7cdcefa9263c9c5c3ad34b6"
+          $zip = "$env:RUNNER_TEMP\llvm-mingw.zip"
+          Invoke-WebRequest "https://github.com/mstorsjo/llvm-mingw/releases/download/$version/llvm-mingw-$version-ucrt-x86_64.zip" -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash -ne $sha256) { throw "llvm-mingw checksum mismatch" }
+          Expand-Archive $zip -DestinationPath $env:RUNNER_TEMP
+          "$env:RUNNER_TEMP\llvm-mingw-$version-ucrt-x86_64\bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Install Go dependencies
+        shell: bash
+        run: |
+          go get -v
+          go install github.com/tc-hib/go-winres@d743268d7ea168077ddd443c4240562d4f5e8c3e  # v0.3.3
+
+      - name: Build GUI
+        shell: bash
+        run: |
+          "$(go env GOPATH)/bin/go-winres" make --arch arm64 --product-version "git-tag"
+          CGO_ENABLED=1 GOOS=windows GOARCH=arm64 CC=aarch64-w64-mingw32-clang CXX=aarch64-w64-mingw32-clang++ go build -v -tags "static gui" -ldflags "-s -w -H=windowsgui -extldflags=-static -X 'equilotl/buildinfo.InstallerGitHash=$(git rev-parse --short HEAD)' -X 'equilotl/buildinfo.InstallerTag=${{ github.ref_name }}'" -o Equilotl-arm64.exe
+
+      - name: Build CLI
+        shell: bash
+        run: |
+          CGO_ENABLED=0 GOOS=windows GOARCH=arm64 go build -v -tags "cli" -ldflags "-s -w -X 'equilotl/buildinfo.InstallerGitHash=$(git rev-parse --short HEAD)' -X 'equilotl/buildinfo.InstallerTag=${{ github.ref_name }}'" -o EquilotlCli-arm64.exe
+
+      - name: Upload unsigned artifact
+        id: upload-unsigned
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Equilotl-windows-arm64-unsigned
+          path: |
+            Equilotl-arm64.exe
+            EquilotlCli-arm64.exe
+
+      - name: Submit SignPath signing request
+        uses: signpath/github-action-submit-signing-request@f6d04783b4569d051e0c80105fe66e82819d0092 # v3.0
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_KEY }}
+          organization-id: ${{ secrets.SIGNPATH_ORG_ID }}
+          project-slug: Equilotl
+          signing-policy-slug: test-signing
+          artifact-configuration-slug: arm64
+          github-artifact-id: ${{ steps.upload-unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          output-artifact-directory: windows-signed/
+
+      - name: Upload signed artifact
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: Equilotl-windows-arm64
+          path: |
+            windows-signed/Equilotl-arm64.exe
+            windows-signed/EquilotlCli-arm64.exe
+
+  release:
+    runs-on: ubuntu-latest
+    needs:
+      [
+        build-linux,
+        build-linux-arm64,
+        build-mac,
+        build-mac-dmg,
+        build-windows,
+        build-windows-arm64,
+      ]
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
       - name: "Download Linux Artifacts"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: Equilotl-linux
           path: linux
 
+      - name: "Download Linux ARM64 Artifacts"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: Equilotl-linux-arm64
+          path: linux
+
       - name: "Download MacOS Artifacts"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: Equilotl-macos
           path: macos
 
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: Equilotl-macos-arm64
+          path: macos
+
+      - name: "Download MacOS DMG"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: Equilotl-macos-universal
+          path: macos
+
       - name: "Download Windows Artifacts"
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: Equilotl-windows
           path: windows
 
+      - name: "Download Windows ARM64 Artifacts"
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: Equilotl-windows-arm64
+          path: windows
+
+      - name: Delete existing release
+        run: gh release delete "${{ github.ref_name }}" --yes || true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Create the release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3d0d9888cb7fd7b750713d6e236d1fcb99157228 # v3.0.2
         with:
           name: ${{ github.ref_name }}
           token: ${{ secrets.GITHUB_TOKEN }}
           generate_release_notes: true
-          make_latest: true
-          prerelease: false
+          make_latest: ${{ !contains(github.ref_name, '-') }}
+          prerelease: ${{ contains(github.ref_name, '-') }}
           draft: false
           body: |
             This is release ${{ github.ref_name }} of Equilotl.
+
+            Windows binaries are code signed via [SignPath](https://signpath.io).
           files: |
             linux/Equilotl-x11
+            linux/Equilotl-wayland
+            linux/Equilotl
             linux/EquilotlCli-linux
-            macos/Equilotl.MacOS.zip
+            linux/Equilotl-x11-arm64
+            linux/Equilotl-wayland-arm64
+            linux/Equilotl-arm64
+            linux/EquilotlCli-linux-arm64
+            macos/Equilotl-x64.dmg
+            macos/Equilotl-arm64.dmg
+            macos/Equilotl.dmg
+            macos/EquilotlCli-x64
+            macos/EquilotlCli-arm64
+            macos/EquilotlCli-universal
             windows/Equilotl*.exe
-
-      - name: Notify webhook (success)
-        if: success()
-        run: |
-          curl -H "Content-Type: application/json" -X POST -d '{"content":"🚀 **Release `${{ github.ref_name }}` published successfully!**\nRelease: ${{ github.server_url }}/${{ github.repository }}/releases/tag/${{ github.ref_name }}"}' ${{ secrets.DISCORD_WEBHOOK }}
-
-      - name: Notify webhook (failure)
-        if: failure()
-        run: |
-          curl -H "Content-Type: application/json" -X POST -d '{"content":"❌ **Release failed** for `${{ github.ref_name }}`\n<@297075664530440192>\nWorkflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"}' ${{ secrets.DISCORD_WEBHOOK }}
